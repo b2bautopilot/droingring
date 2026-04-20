@@ -181,6 +181,9 @@ export class RoomManager extends EventEmitter {
   async joinByTicket(ticket: string, nicknameOverride?: string): Promise<Room> {
     const t = decodeTicket(ticket);
     const nickname = nicknameOverride || this.nickname;
+    const precomputedId = deriveRoomId(t.roomName, t.rootSecret);
+    const existing = this.rooms.get(Buffer.from(precomputedId).toString('hex'));
+    if (existing) return existing;
     const room = new Room(
       {
         name: t.roomName,

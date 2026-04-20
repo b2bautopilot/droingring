@@ -187,8 +187,10 @@ const sendMessage: ToolDef<{ room: string; text: string; reply_to?: string }> = 
   handler: async ({ manager }, args) => {
     const room = manager.resolveRoom(args.room);
     if (!room) return err(`No such room: ${args.room}`);
-    const { id, ts } = room.sendMessage(args.text, args.reply_to);
-    return ok(`Sent to ${room.name}: ${args.text}`, {
+    const text = args.text.trim();
+    if (!text) return err('message text is empty or whitespace-only');
+    const { id, ts } = room.sendMessage(text, args.reply_to);
+    return ok(`Sent to ${room.name}: ${text}`, {
       message_id: id,
       ts: new Date(ts).toISOString(),
     });
