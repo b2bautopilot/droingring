@@ -417,19 +417,57 @@ export const UI_HTML = `<!doctype html>
     min-height: 100vh;
     display: grid; place-items: center;
     padding: 20px;
+    background: var(--bg);
   }
   #login .card {
     background: var(--bg-elev);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 28px 32px;
-    max-width: 420px; width: 100%;
+    max-width: 520px; width: 100%;
     box-shadow: var(--shadow);
   }
   #login h1 {
     margin: 0 0 6px; font-size: 22px; font-weight: 700;
   }
-  #login p { margin: 0 0 16px; color: var(--text-dim); font-size: 13px; }
+  #login .lead { margin: 0 0 20px; color: var(--text-dim); font-size: 14px; }
+  .help-box {
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 0 0 18px;
+  }
+  .help-box h3 {
+    margin: 0 0 8px; font-size: 13px; font-weight: 600;
+  }
+  .help-box p { margin: 0 0 10px; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+  .cmd-row {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin: 6px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+  }
+  .cmd-row code {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: transparent; padding: 0;
+  }
+  .cmd-row .copy-btn {
+    padding: 4px 10px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--bg);
+    font-size: 11px; font-weight: 500;
+    flex-shrink: 0;
+  }
+  .cmd-row .copy-btn:hover { background: var(--bg-hover); }
+  .cmd-row small {
+    color: var(--text-muted); font-size: 11.5px;
+    margin-left: auto; white-space: nowrap;
+  }
 
   /* toast */
   #toast-area {
@@ -493,14 +531,36 @@ export const UI_HTML = `<!doctype html>
 <div id="login">
   <form id="login-form" class="card">
     <h1>agentchat</h1>
-    <p>Paste your access token to sign in. You'll find it in the terminal
-       where <code>agentchat-mcp</code> / <code>agentchat web</code> started,
-       or at <code>~/.agentchat/web-token</code>.</p>
-    <div class="field">
-      <label for="token-input">Access token</label>
-      <input id="token-input" type="password" autocomplete="off" spellcheck="false" placeholder="paste token">
+    <p class="lead">Sign in with your access token.</p>
+
+    <div class="help-box">
+      <h3>Don't have the URL? Run one of these in your terminal:</h3>
+      <p>When agentchat is launched by Claude Code, Codex, or another MCP
+         host, the sign-in URL is logged to <em>that host's</em> log file —
+         not shown in the chat. You can always recover it locally:</p>
+      <div class="cmd-row">
+        <code>agentchat url</code>
+        <button type="button" class="copy-btn" data-copy="agentchat url">Copy</button>
+        <small>prints the full URL</small>
+      </div>
+      <div class="cmd-row">
+        <code>cat ~/.agentchat/web-token</code>
+        <button type="button" class="copy-btn" data-copy="cat ~/.agentchat/web-token">Copy</button>
+        <small>just the token</small>
+      </div>
+      <div class="cmd-row">
+        <code>agentchat doctor</code>
+        <button type="button" class="copy-btn" data-copy="agentchat doctor">Copy</button>
+        <small>health check + URL</small>
+      </div>
     </div>
-    <div class="actions"><button class="btn primary" type="submit">Unlock</button></div>
+
+    <div class="field">
+      <label for="token-input">Token or sign-in URL</label>
+      <input id="token-input" type="password" autocomplete="off" spellcheck="false"
+             placeholder="paste the output of agentchat url or the token itself">
+    </div>
+    <div class="actions"><button class="btn primary" type="submit">Sign in</button></div>
   </form>
 </div>
 
@@ -666,6 +726,8 @@ export const UI_HTML = `<!doctype html>
     </div>
   </div>
   <div class="actions">
+    <button type="button" class="btn danger" id="sign-out">Sign out</button>
+    <div style="flex:1;"></div>
     <button type="button" class="btn" value="close">Close</button>
     <button type="button" class="btn primary" id="nick-submit">Save nickname</button>
   </div>
@@ -692,14 +754,27 @@ export const UI_HTML = `<!doctype html>
   // ------- token + join bootstrap -------
   const TOKEN_KEY = 'agentchat_token';
   const PENDING_JOIN_KEY = 'agentchat_pending_join';
+  // localStorage so the UI remembers us across browser close/reopen — the
+  // token is already scoped to localhost and protected by 0600 perms on
+  // the source file. A "Sign out" button in Settings clears it.
   function bootstrapToken() {
     const m = /^#token=([0-9a-fA-F]{64})$/.exec(location.hash);
     if (m) {
-      sessionStorage.setItem(TOKEN_KEY, m[1]);
+      localStorage.setItem(TOKEN_KEY, m[1]);
       history.replaceState(null, '', location.pathname);
       return m[1];
     }
-    return sessionStorage.getItem(TOKEN_KEY);
+    return localStorage.getItem(TOKEN_KEY);
+  }
+  // Accept either the bare 64-char token or a full URL containing
+  // '#token=…' / '?token=…' — whatever the user pastes from
+  // 'agentchat url', 'cat ~/.agentchat/web-url', or the web-token file.
+  function extractToken(s) {
+    const trimmed = (s || '').trim();
+    const m = /[#?&]token=([0-9a-fA-F]{64})/.exec(trimmed);
+    if (m) return m[1];
+    if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return trimmed;
+    return null;
   }
   function consumePendingJoin() {
     // Recognise share links in the form /#join=<ticket>. We stash the ticket
@@ -749,7 +824,7 @@ export const UI_HTML = `<!doctype html>
     opts.headers = Object.assign(headers, opts.headers || {});
     const res = await fetch(path, opts);
     if (res.status === 401) {
-      sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY);
       location.reload();
       throw new Error('unauthorized');
     }
@@ -780,7 +855,7 @@ export const UI_HTML = `<!doctype html>
         openDialog('join-dialog');
       }
     } catch (e) {
-      sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY);
       $('login').classList.remove('hidden');
       $('app').classList.add('hidden');
       if (e.message !== 'unauthorized') toast('Login failed: ' + e.message, 'err');
@@ -1060,10 +1135,28 @@ export const UI_HTML = `<!doctype html>
   // ------- wire events -------
   $('login-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    token = $('token-input').value.trim();
-    if (!token) return;
-    sessionStorage.setItem(TOKEN_KEY, token);
+    const raw = $('token-input').value;
+    const extracted = extractToken(raw);
+    if (!extracted) {
+      toast('That doesn\\'t look like a valid token or sign-in URL.', 'err');
+      return;
+    }
+    token = extracted;
+    localStorage.setItem(TOKEN_KEY, token);
     login();
+  });
+
+  // wire the Copy buttons on the login help box
+  qsa('.copy-btn[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const text = btn.getAttribute('data-copy');
+      if (!text) return;
+      doCopy(text, () => {
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+      });
+    });
   });
 
   $('btn-new-room').addEventListener('click', () => {
@@ -1236,6 +1329,11 @@ export const UI_HTML = `<!doctype html>
 
   qsa('[data-theme-set]').forEach((btn) => {
     btn.addEventListener('click', () => applyTheme(btn.getAttribute('data-theme-set')));
+  });
+
+  $('sign-out').addEventListener('click', () => {
+    localStorage.removeItem(TOKEN_KEY);
+    location.reload();
   });
 
   $('btn-sidebar').addEventListener('click', () => $('app').classList.toggle('sidebar-open'));

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.6 — 2026-04-20
+
+- **Login page rewrite for Claude Code / MCP-host users.** The login
+  screen now has a prominent "Don't have the URL?" help box with three
+  click-to-copy commands: `agentchat url`, `cat ~/.agentchat/web-token`,
+  `agentchat doctor`. Explains that MCP hosts log the sign-in URL to
+  their own log file, not the chat.
+- **Accepts full sign-in URL.** The token input now extracts the token
+  from anything matching `#token=…` / `?token=…`, so you can paste
+  `agentchat url` output straight in.
+- **Token persists across browser sessions.** Switched from
+  `sessionStorage` to `localStorage` — closing the tab no longer logs
+  you out. New "Sign out" button in Settings clears it on demand.
+
 ## 0.3.5 — 2026-04-20
 
 - **URL discoverability.** The web UI URL (with auto-login token) is now
