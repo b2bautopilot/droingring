@@ -617,12 +617,7 @@ export const UI_HTML = `<!doctype html>
       </div>
     </header>
 
-    <div class="messages" id="messages">
-      <div class="empty" id="empty-state">
-        <p>No room selected.</p>
-        <p>Click <strong>+</strong> to create one, or paste a ticket to join.</p>
-      </div>
-    </div>
+    <div class="messages" id="messages"></div>
 
     <div class="composer-wrap" id="composer-wrap">
       <form class="composer" id="composer">
@@ -931,6 +926,17 @@ export const UI_HTML = `<!doctype html>
     }
   }
 
+  function makeEmpty(lines) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    for (const line of lines) {
+      const p = document.createElement('p');
+      p.textContent = line;
+      e.appendChild(p);
+    }
+    return e;
+  }
+
   async function refreshActiveRoom() {
     const room = rooms.find((r) => r.id === activeRoomId);
     const app = $('app');
@@ -938,8 +944,12 @@ export const UI_HTML = `<!doctype html>
       $('room-name').textContent = 'Select a room';
       $('room-topic').textContent = '';
       $('btn-admission').textContent = '—';
-      $('messages').textContent = '';
-      $('messages').appendChild($('empty-state'));
+      const msgs = $('messages');
+      msgs.textContent = '';
+      msgs.appendChild(makeEmpty([
+        'No room selected.',
+        'Click + to create one, or paste a ticket to join.',
+      ]));
       $('members-list').textContent = '';
       $('pending-area').textContent = '';
       $('composer-wrap').classList.add('hidden');
@@ -992,11 +1002,7 @@ export const UI_HTML = `<!doctype html>
     const box = $('messages');
     box.textContent = '';
     if (messages.length === 0) {
-      const e = document.createElement('div');
-      e.className = 'empty';
-      const p = document.createElement('p'); p.textContent = 'No messages yet. Say hi 👋';
-      e.appendChild(p);
-      box.appendChild(e);
+      box.appendChild(makeEmpty(['No messages yet. Say hi 👋']));
       return;
     }
     let prev = null;

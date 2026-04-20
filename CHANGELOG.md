@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.7 — 2026-04-20
+
+- **Fix "Login failed: Failed to execute 'appendChild' on 'Node'".** When
+  signing in on a fresh install with zero rooms, `refreshActiveRoom` did
+  `$('messages').textContent = ''` (removes all children, including
+  `#empty-state`) followed by `$('messages').appendChild($('empty-state'))`
+  — the second lookup returned `null`, which `appendChild` rejects. Now
+  we build the empty-state element fresh each time via a shared
+  `makeEmpty([line1, line2])` helper. Same helper used in
+  `renderMessages` for consistency.
+
 ## 0.3.6 — 2026-04-20
 
 - **Login page rewrite for Claude Code / MCP-host users.** The login
