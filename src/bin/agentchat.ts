@@ -47,6 +47,7 @@ program
     const { manager, repo } = await buildContextAndServer();
     const { startWebServer } = await import('../web/server.js');
     const { loadOrCreateToken } = await import('../web/auth.js');
+    const { writeWebUrl, clearWebUrl } = await import('../web/url-file.js');
     const token = loadOrCreateToken();
     const srv = await startWebServer({
       host: opts.host,
@@ -56,16 +57,35 @@ program
       token,
     });
     const linkable = `${srv.url}/#token=${token}`;
-    process.stderr.write(`\n  agentchat web UI: ${srv.url}\n`);
-    process.stderr.write(`  auto-login URL:   ${linkable}\n`);
-    process.stderr.write('  token path:       ~/.agentchat/web-token\n\n');
+    writeWebUrl(linkable);
+    process.stderr.write('\n  ┌─ agentchat web UI ──────────────────────────────────────\n');
+    process.stderr.write(`  │  open this:  ${linkable}\n`);
+    process.stderr.write(`  │  bind:       ${srv.url}\n`);
+    process.stderr.write('  │  also saved to ~/.agentchat/web-url  (agentchat url to print)\n');
+    process.stderr.write('  └─────────────────────────────────────────────────────────\n\n');
     const stop = async () => {
+      clearWebUrl();
       await srv.close();
       await manager.stop();
       process.exit(0);
     };
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
+  });
+
+program
+  .command('url')
+  .description('Print the current web UI URL (with auto-login token)')
+  .action(async () => {
+    const { readWebUrl, webUrlPath } = await import('../web/url-file.js');
+    const url = readWebUrl();
+    if (!url) {
+      process.stderr.write(
+        `No web URL recorded at ${webUrlPath()}.\nStart one with \`agentchat web\` or let \`agentchat-mcp\` boot it.\n`,
+      );
+      process.exit(1);
+    }
+    process.stdout.write(`${url}\n`);
   });
 
 program
@@ -147,6 +167,9 @@ program
     }
     const cfg = loadConfig();
     process.stdout.write(`nickname: ${cfg.nickname}\n`);
+    const { readWebUrl } = await import('../web/url-file.js');
+    const url = readWebUrl();
+    if (url) process.stdout.write(`web URL:  ${url}\n`);
     process.exit(all ? 0 : 1);
   });
 

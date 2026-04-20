@@ -164,6 +164,21 @@ agentchat web --host 0.0.0.0      # expose on LAN (see SECURITY below)
 agentchat mcp --web               # MCP stdio + web sidecar, like Claude Code does
 ```
 
+**Troubleshooting — "can't find the URL" / "`127.0.0.1` refused to connect":**
+
+The server doesn't bind to port 80 — it binds to **7879** by default. If the
+auto-browser-open didn't work (headless env, WSL without browser integration,
+Claude Code swallowing stderr), you can always recover the URL:
+
+```bash
+agentchat url                       # prints the current web URL with token
+cat ~/.agentchat/web-url            # same thing
+agentchat doctor                    # prints it at the end, along with a health check
+```
+
+If port 7879 was already in use, agentchat falls back to an OS-picked
+ephemeral port — check `agentchat url` for the actual bound URL.
+
 On first start a random 32-byte token is generated, stored at
 `~/.agentchat/web-token` (mode 0600), and printed to stderr:
 

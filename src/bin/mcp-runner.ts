@@ -45,6 +45,7 @@ async function launchWebSidecar(manager: RoomManager, repo: Repo): Promise<void>
   const { startWebServer } = await import('../web/server.js');
   const { loadOrCreateToken } = await import('../web/auth.js');
   const { tryOpenBrowser } = await import('../web/open-browser.js');
+  const { writeWebUrl } = await import('../web/url-file.js');
 
   const token = loadOrCreateToken();
   const preferredPort = Number(process.env.AGENTCHAT_WEB_PORT || 7879);
@@ -54,19 +55,35 @@ async function launchWebSidecar(manager: RoomManager, repo: Repo): Promise<void>
     srv = await startWebServer({ host: '127.0.0.1', port: preferredPort, manager, repo, token });
   } catch (e: any) {
     if (e?.code === 'EADDRINUSE') {
-      // Likely another agentchat-mcp session already has the UI up — don't
-      // double-open the browser, just log and skip.
-      process.stderr.write(
-        `[agentchat] web UI port ${preferredPort} busy; another instance is probably serving it.\n`,
-      );
+      // Port busy. Could be another agentchat, could be an unrelated service.
+      // Fall back to an OS-chosen ephemeral port so the UI still works, and
+      // the user can discover the actual URL via ~/.agentchat/web-url.
+      try {
+        srv = await startWebServer({ host: '127.0.0.1', port: 0, manager, repo, token });
+        process.stderr.write(
+          `[agentchat] port ${preferredPort} was busy, using ${srv.address.port} instead.\n`,
+        );
+      } catch (e2: any) {
+        process.stderr.write(`[agentchat] web UI failed to start: ${e2?.message || e2}\n`);
+        return;
+      }
+    } else {
+      process.stderr.write(`[agentchat] web UI failed to start: ${e?.message || e}\n`);
       return;
     }
-    process.stderr.write(`[agentchat] web UI failed to start: ${e?.message || e}\n`);
-    return;
   }
 
   const url = `${srv.url}/#token=${token}`;
-  process.stderr.write(`[agentchat] web UI: ${url}\n`);
+  writeWebUrl(url);
+
+  // Prominent banner so it's not lost in a sea of other stderr.
+  process.stderr.write('\n');
+  process.stderr.write('  ┌─ agentchat web UI ──────────────────────────────────────\n');
+  process.stderr.write(`  │  ${url}\n`);
+  process.stderr.write('  │\n');
+  process.stderr.write('  │  also saved to ~/.agentchat/web-url\n');
+  process.stderr.write('  │  recover anytime with:  agentchat url\n');
+  process.stderr.write('  └─────────────────────────────────────────────────────────\n\n');
 
   if (process.env.AGENTCHAT_WEB_OPEN !== '0') tryOpenBrowser(url);
 }

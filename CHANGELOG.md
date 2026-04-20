@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.5 — 2026-04-20
+
+- **URL discoverability.** The web UI URL (with auto-login token) is now
+  persisted to `~/.agentchat/web-url` (mode 0600) every time the server
+  boots. New `agentchat url` command prints it; `agentchat doctor`
+  includes it in the health report. Fixes the "I typed `127.0.0.1` and
+  got connection refused" failure mode when stderr is swallowed by
+  Claude Code or the auto-browser-open silently fails.
+- **Prominent stderr banner.** Replaces the single log line with a boxed
+  banner highlighting the URL and recovery paths.
+- **EADDRINUSE fallback.** When the preferred port is held by an unrelated
+  service, the sidecar now falls back to an OS-picked ephemeral port (and
+  records the actual URL) instead of silently skipping the web UI.
+
 ## 0.3.4 — 2026-04-20
 
 - **Share flow.** The topbar "Invite" button is now a primary "Share"
