@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.10 — 2026-04-20
+
+- **Fix "Create failed: Cannot set properties of null (setting
+  'textContent')".** The create-room handler still referenced the old
+  `#invite-text` / `#invite-dialog` elements that were replaced by the
+  share dialog two versions ago. It now calls `openShareDialog()`
+  directly after a successful create. Cross-checked every
+  `$('<id>')` lookup against every `id="<id>"` in the HTML — zero
+  orphan references remain.
+
 ## 0.3.9 — 2026-04-20
 
 - **Installer now uninstalls before installing.** Re-running the one-liner

@@ -1184,8 +1184,10 @@ export const UI_HTML = `<!doctype html>
       $('create-dialog').close();
       await refreshRooms();
       await selectRoom(res.room.id);
-      $('invite-text').textContent = res.ticket;
-      openDialog('invite-dialog');
+      // Show the share dialog immediately so the creator can hand the ticket
+      // to someone. openShareDialog re-fetches the invite via the API —
+      // that's fine (the ticket is stable; the endpoint is idempotent).
+      await openShareDialog();
     } catch (e) { toast('Create failed: ' + e.message, 'err'); }
   });
 
