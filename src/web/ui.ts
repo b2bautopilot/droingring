@@ -632,8 +632,8 @@ export const UI_HTML = `<!doctype html>
   </p>
 
   <div class="field">
-    <label>Invite message <span style="color:var(--text-muted);font-weight:400;">(what to send)</span></label>
-    <textarea id="share-message" rows="10" readonly spellcheck="false"
+    <label>Invite message <span style="color:var(--text-muted);font-weight:400;">(edit before sending if you want)</span></label>
+    <textarea id="share-message" rows="10" spellcheck="false"
       style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;"></textarea>
   </div>
 
@@ -647,7 +647,7 @@ export const UI_HTML = `<!doctype html>
     <button type="button" class="btn" id="share-copy-ticket">Copy ticket only</button>
     <button type="button" class="btn" id="share-email">Email…</button>
     <button type="button" class="btn hidden" id="share-native">Share…</button>
-    <button type="button" class="btn primary" id="share-copy-msg">Copy message</button>
+    <button type="button" class="btn primary" id="share-copy-msg" autofocus>Copy message</button>
   </div>
 </dialog>
 
@@ -849,6 +849,11 @@ export const UI_HTML = `<!doctype html>
       $('app').classList.remove('sidebar-open');
     }
     await refreshActiveRoom();
+    // Focus the composer after a room switch — mirrors ChatGPT / Discord.
+    // Skip on touch devices where a soft keyboard would pop unexpectedly.
+    if (!window.matchMedia('(pointer: coarse)').matches) {
+      requestAnimationFrame(() => $('input').focus());
+    }
   }
 
   async function refreshActiveRoom() {
@@ -1102,7 +1107,11 @@ export const UI_HTML = `<!doctype html>
   });
 
   function composeInvite(roomName, ticket) {
-    const quickLink = location.origin + '/#join=' + ticket;
+    // Quick-link points at the RECIPIENT's default agentchat port (7879),
+    // not the sender's — the sender might be on a custom port but the
+    // recipient almost certainly isn't. Falling back to the manual paste
+    // step still works if their port differs.
+    const quickLink = 'http://127.0.0.1:7879/#join=' + ticket;
     return [
       'You\\'re invited to "' + roomName + '" on agentchat',
       '(peer-to-peer, end-to-end encrypted chat).',
@@ -1160,9 +1169,8 @@ export const UI_HTML = `<!doctype html>
       $('share-message').value = composeInvite(currentShareRoom, currentShareTicket);
       $('share-ticket').textContent = currentShareTicket;
       // Show native share button only if the platform supports it.
-      $('share-native').classList.toggle(
-        'hidden', !(navigator.share && navigator.canShare),
-      );
+      // canShare is optional on some older impls of navigator.share.
+      $('share-native').classList.toggle('hidden', typeof navigator.share !== 'function');
       openDialog('share-dialog');
     } catch (e) { toast(e.message, 'err'); }
   }
@@ -1182,14 +1190,17 @@ export const UI_HTML = `<!doctype html>
       + '&body=' + encodeURIComponent(body);
   });
   $('share-native').addEventListener('click', async () => {
-    if (!(navigator.share && navigator.canShare)) return;
+    if (typeof navigator.share !== 'function') return;
     const payload = {
       title: 'Join "' + currentShareRoom + '" on agentchat',
       text: $('share-message').value,
     };
-    if (!navigator.canShare(payload)) { toast('Share sheet unavailable.', 'warn'); return; }
+    if (navigator.canShare && !navigator.canShare(payload)) {
+      toast('This platform can\\'t share that payload.', 'warn');
+      return;
+    }
     try { await navigator.share(payload); }
-    catch (_) { /* user cancelled */ }
+    catch (_) { /* user cancelled or share failed silently */ }
   });
 
   $('btn-admission').addEventListener('click', async () => {
