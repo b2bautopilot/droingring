@@ -144,6 +144,22 @@ export class RoomManager extends EventEmitter {
     room.on('member_joined', (m) => this.emit('member_joined', m, room));
     room.on('member_kicked', (p) => this.emit('member_kicked', p, room));
     room.on('members_update', (ms) => this.emit('members_update', ms, room));
+    // When the room closes — either because we received the creator-signed
+    // close envelope, or because we (as creator) broadcast one via
+    // closeRoom() — drop the in-memory Room and mark it closed. The
+    // swarm.leaveTopic call is deferred only on the creator path (handled
+    // by leaveRoom, which sleeps first so the broadcast flushes); for
+    // non-creators receiving the close we tear down the swarm immediately.
+    room.on('closed', (info: { closed_at: number; reason?: string }) => {
+      this.emit('room_closed', { room_id: room.idHex, name: room.name, ...info }, room);
+      this.rooms.delete(room.idHex);
+      this.repo.markRoomLeft(room.idHex);
+      if (!room.isCreator()) {
+        this.swarm.leaveTopic(room.id).catch(() => {
+          /* already gone is fine */
+        });
+      }
+    });
     this.rooms.set(room.idHex, room);
   }
 
@@ -182,7 +198,11 @@ export class RoomManager extends EventEmitter {
     const t = decodeTicket(ticket);
     const nickname = nicknameOverride || this.nickname;
     const precomputedId = deriveRoomId(t.roomName, t.rootSecret);
-    const existing = this.rooms.get(Buffer.from(precomputedId).toString('hex'));
+    const idHex = Buffer.from(precomputedId).toString('hex');
+    if (this.repo.isRoomClosed(idHex)) {
+      throw new Error('This room has been closed by its creator.');
+    }
+    const existing = this.rooms.get(idHex);
     if (existing) return existing;
     const room = new Room(
       {
@@ -212,10 +232,27 @@ export class RoomManager extends EventEmitter {
   async leaveRoom(idOrName: string): Promise<boolean> {
     const room = this.resolveRoom(idOrName);
     if (!room) return false;
+    if (room.isCreator()) {
+      // Creator leaving closes the room for everyone. Broadcast the signed
+      // close envelope first, give it a moment to flush to connected peers,
+      // then tear down the swarm connection.
+      try {
+        room.closeRoom();
+      } catch {
+        /* fall through to leave anyway */
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
     await this.swarm.leaveTopic(room.id);
     this.repo.markRoomLeft(room.idHex);
     this.rooms.delete(room.idHex);
     return true;
+  }
+
+  /** Explicit close — same effect as the creator leaving, but without the
+   * overload on `leaveRoom`. Safe to call from UI "Close room" buttons. */
+  async closeAndLeave(idOrName: string): Promise<boolean> {
+    return this.leaveRoom(idOrName);
   }
 
   /**

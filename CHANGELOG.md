@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 — 2026-04-20
+
+- **Zoom-style room close.** When the creator leaves a room (via `/chat
+  leave`, `agentchat leave`, REST `/api/rooms/:id/leave`, TUI `/leave`,
+  or the Web-UI **Close room** button), agentchat now broadcasts a
+  signed `close` envelope to every connected member. On receipt: room
+  is marked `closed_at` in sqlite, dropped from memory, swarm topic is
+  torn down, and the web UI shows a toast "Room … was closed by the
+  creator." The invite ticket is refused on future `joinByTicket`
+  calls (`"This room has been closed by its creator."`). `sendMessage`
+  on a closed Room throws.
+- **UI confirmations.** The Web-UI topbar gains a Leave button that
+  reads **Close room** (red) when the current user is the creator;
+  the confirm dialog spells out that other members will be
+  disconnected and the ticket will stop working.
+- **Protocol:** new `close` envelope type, signed by creator, sealed
+  with the meta key (epoch 0) so late joiners with only the ticket
+  can still decode the tombstone. Forged close envelopes from
+  non-creators are rejected on receipt (same guard as `kick`).
+- **Schema:** additive `rooms.closed_at INTEGER` migration; `upsertRoom`
+  preserves the existing `closed_at` via `COALESCE` so accidental
+  writes don't clear the tombstone.
+- New tests: creator close propagates and freezes peers' rooms;
+  forged close from non-creator rejected; creator leaveRoom closes the
+  room and subsequent joinByTicket is refused.
+
 ## 0.4.1 — 2026-04-20
 
 - **Electron desktop shell (optional).** Install with `AGENTCHAT_ELECTRON=1

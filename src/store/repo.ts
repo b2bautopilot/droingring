@@ -11,6 +11,8 @@ export interface RoomRow {
   joined_at: string;
   left_at: string | null;
   admission_mode: string;
+  /** unix ms when the room was closed (creator-signed close envelope observed). */
+  closed_at: number | null;
 }
 
 export interface JoinRequestRow {
@@ -48,15 +50,16 @@ export class Repo {
   upsertRoom(r: RoomRow): void {
     this.db
       .prepare(
-        `INSERT INTO rooms (id, name, topic, creator_pubkey, root_secret, epoch, current_key, joined_at, left_at, admission_mode)
-         VALUES (@id, @name, @topic, @creator_pubkey, @root_secret, @epoch, @current_key, @joined_at, @left_at, @admission_mode)
+        `INSERT INTO rooms (id, name, topic, creator_pubkey, root_secret, epoch, current_key, joined_at, left_at, admission_mode, closed_at)
+         VALUES (@id, @name, @topic, @creator_pubkey, @root_secret, @epoch, @current_key, @joined_at, @left_at, @admission_mode, @closed_at)
          ON CONFLICT(id) DO UPDATE SET
            name=excluded.name,
            topic=excluded.topic,
            epoch=excluded.epoch,
            current_key=excluded.current_key,
            left_at=excluded.left_at,
-           admission_mode=excluded.admission_mode`,
+           admission_mode=excluded.admission_mode,
+           closed_at=COALESCE(excluded.closed_at, rooms.closed_at)`,
       )
       .run(r);
   }
@@ -93,6 +96,19 @@ export class Repo {
 
   markRoomLeft(id: string): void {
     this.db.prepare('UPDATE rooms SET left_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+  }
+
+  markRoomClosed(id: string, closed_at: number): void {
+    this.db
+      .prepare('UPDATE rooms SET closed_at = ?, left_at = COALESCE(left_at, ?) WHERE id = ?')
+      .run(closed_at, new Date().toISOString(), id);
+  }
+
+  isRoomClosed(id: string): boolean {
+    const row = this.db.prepare('SELECT closed_at FROM rooms WHERE id = ?').get(id) as
+      | { closed_at: number | null }
+      | undefined;
+    return !!row?.closed_at;
   }
 
   upsertMember(m: MemberRow): void {

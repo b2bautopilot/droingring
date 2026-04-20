@@ -114,6 +114,9 @@ function migrate(db: DB): void {
   if (!roomCols.some((c) => c.name === 'admission_mode')) {
     db.exec("ALTER TABLE rooms ADD COLUMN admission_mode TEXT NOT NULL DEFAULT 'open'");
   }
+  if (!roomCols.some((c) => c.name === 'closed_at')) {
+    db.exec('ALTER TABLE rooms ADD COLUMN closed_at INTEGER');
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS join_requests (
       room_id TEXT NOT NULL,

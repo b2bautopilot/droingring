@@ -97,6 +97,31 @@ describe('RoomManager', () => {
     db2.close();
   });
 
+  it('creator leaveRoom closes the room; re-joining via ticket is refused', async () => {
+    const alice = makeIdentity();
+    const a = tmpDb();
+    const mgrA = new RoomManager({
+      identity: alice,
+      repo: a.repo,
+      nickname: 'alice',
+      clientName: 't',
+      version: '0',
+      swarm: new FakeSwarm(),
+    });
+    await mgrA.start();
+
+    const room = await mgrA.createRoom('#zoom');
+    const ticket = room.toTicket();
+    expect(a.repo.isRoomClosed(room.idHex)).toBe(false);
+
+    await mgrA.leaveRoom(room.idHex);
+    expect(a.repo.isRoomClosed(room.idHex)).toBe(true);
+
+    await expect(mgrA.joinByTicket(ticket)).rejects.toThrow(/closed/);
+
+    a.close();
+  });
+
   it('ticket create + join roundtrips through manager', async () => {
     const alice = makeIdentity();
     const bob = makeIdentity();

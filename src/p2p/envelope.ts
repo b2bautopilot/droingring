@@ -6,6 +6,7 @@ export type EnvelopeType =
   | 'msg'
   | 'key_update'
   | 'kick'
+  | 'close'
   | 'ping'
   | 'pong'
   | 'note_put'
@@ -57,6 +58,11 @@ export interface InnerKick {
   reason?: string;
 }
 
+export interface InnerClose {
+  closed_at: number;
+  reason?: string;
+}
+
 export interface InnerNotePut {
   id: string; // UUID, stable across edits
   title: string;
@@ -98,6 +104,7 @@ export type Inner =
   | InnerMsg
   | InnerKeyUpdate
   | InnerKick
+  | InnerClose
   | InnerNotePut
   | InnerNoteDelete
   | InnerGraphAssert

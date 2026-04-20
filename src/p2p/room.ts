@@ -5,6 +5,7 @@ import { base32Encode } from './base32.js';
 import { deriveRoomId, hkdf, openSealedBox, randomKey, sealToX25519 } from './crypto.js';
 import {
   type Envelope,
+  type InnerClose,
   type InnerGraphAssert,
   type InnerGraphRetract,
   type InnerHello,
@@ -149,6 +150,12 @@ function validGraphAssert(inner: InnerGraphAssert): boolean {
   return true;
 }
 
+function validClose(inner: InnerClose): boolean {
+  if (typeof inner.closed_at !== 'number' || !Number.isFinite(inner.closed_at)) return false;
+  if (inner.reason !== undefined && typeof inner.reason !== 'string') return false;
+  return true;
+}
+
 function validGraphRetract(inner: InnerGraphRetract): boolean {
   if (
     !Array.isArray(inner.ids) ||
@@ -196,6 +203,8 @@ export class Room extends EventEmitter {
   admissionMode: AdmissionMode = 'open';
   /** Pending join requests (creator-only, approval-mode rooms). Keyed by base32(pubkey). */
   readonly pending: Map<string, PendingRequest> = new Map();
+  /** Unix ms of the creator-signed close. Non-null ⇒ the room is frozen. */
+  closedAt: number | null = null;
 
   constructor(
     init: RoomInit,
@@ -361,6 +370,7 @@ export class Room extends EventEmitter {
   }
 
   sendMessage(text: string, reply_to?: string): { id: string; ts: number } {
+    if (this.closedAt) throw new Error('this room has been closed');
     const id = randomUUID();
     const inner: InnerMsg = { id, text, reply_to };
     const env = sealEnvelope(
@@ -405,6 +415,30 @@ export class Room extends EventEmitter {
     this.members.delete(base32Encode(targetPubkey));
     this.repo.removeMember(this.idHex, base32Encode(targetPubkey));
     this.rotateKey();
+  }
+
+  /** Creator-only: close the room for everyone. Broadcasts a signed close
+   * envelope, persists the tombstone, and emits 'closed' locally. Peers
+   * still connected at broadcast time will see the close envelope and
+   * mark the room closed on their side. */
+  closeRoom(reason?: string): void {
+    if (Buffer.compare(this.identity.publicKey, this.creatorPubkey) !== 0) {
+      throw new Error('only the room creator can close the room');
+    }
+    const closed_at = Date.now();
+    const inner: InnerClose = { closed_at, reason };
+    const env = sealEnvelope(
+      'close',
+      this.id,
+      this.identity.publicKey,
+      this.identity.privateKey,
+      this.metaKey,
+      inner,
+    );
+    this.broadcast(env);
+    this.closedAt = closed_at;
+    this.repo.markRoomClosed(this.idHex, closed_at);
+    this.emit('closed', { closed_at, reason });
   }
 
   /** Rotate key. Mints a new sender key and seals it to every remaining member. */
@@ -570,6 +604,18 @@ export class Room extends EventEmitter {
         if (Buffer.compare(inner.target_pubkey, this.identity.publicKey) === 0) {
           this.emit('self_kicked');
         }
+        return true;
+      }
+      case 'close': {
+        // Only the creator can close a room. The envelope is sealed with the
+        // meta key (epoch 0) so late joiners with only the ticket can still
+        // decode the tombstone. Non-creator 'close' envelopes are forgeries.
+        if (Buffer.compare(env.from, this.creatorPubkey) !== 0) return false;
+        const inner = openEnvelope<InnerClose>(env, [this.metaKey]);
+        if (!inner || !validClose(inner)) return false;
+        this.closedAt = inner.closed_at;
+        this.repo.markRoomClosed(this.idHex, inner.closed_at);
+        this.emit('closed', { closed_at: inner.closed_at, reason: inner.reason });
         return true;
       }
       case 'note_put': {
@@ -798,6 +844,7 @@ export class Room extends EventEmitter {
       joined_at: new Date().toISOString(),
       left_at: null,
       admission_mode: this.admissionMode,
+      closed_at: this.closedAt,
     });
   }
 

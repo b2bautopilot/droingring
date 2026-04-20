@@ -107,6 +107,63 @@ describe('Room two-peer loopback', () => {
     c.close();
   });
 
+  it('creator closeRoom broadcasts a tombstone; peers mark the room closed and sends fail', async () => {
+    const broker = new InMemoryBroker();
+    const alice = makeIdentity(); // creator
+    const bob = makeIdentity();
+    const a = tmpDb();
+    const b = tmpDb();
+    const rootSecret = randomKey();
+    const roomName = '#ends';
+
+    const roomA = buildRoom(roomName, rootSecret, alice.publicKey, alice, a.repo, broker);
+    roomA.initSelf('alice');
+    const roomB = buildRoom(roomName, rootSecret, alice.publicKey, bob, b.repo, broker);
+    roomB.sendHello('bob', 't', '0');
+    await new Promise((r) => setTimeout(r, 20));
+
+    roomA.closeRoom('session over');
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(roomA.closedAt).not.toBeNull();
+    expect(roomB.closedAt).not.toBeNull();
+    expect(a.repo.isRoomClosed(roomA.idHex)).toBe(true);
+    expect(b.repo.isRoomClosed(roomB.idHex)).toBe(true);
+
+    // Post-close sends throw — room is frozen.
+    expect(() => roomA.sendMessage('after-close')).toThrow(/closed/);
+    expect(() => roomB.sendMessage('after-close')).toThrow(/closed/);
+
+    a.close();
+    b.close();
+  });
+
+  it('forged close from a non-creator is rejected', async () => {
+    const broker = new InMemoryBroker();
+    const alice = makeIdentity(); // creator
+    const bob = makeIdentity();
+    const a = tmpDb();
+    const b = tmpDb();
+    const rootSecret = randomKey();
+    const roomName = '#no-forge-close';
+
+    const roomA = buildRoom(roomName, rootSecret, alice.publicKey, alice, a.repo, broker);
+    roomA.initSelf('alice');
+    const roomB = buildRoom(roomName, rootSecret, alice.publicKey, bob, b.repo, broker);
+    roomB.sendHello('bob', 't', '0');
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Bob (non-creator) attempts to close. Local guard throws; envelope forgery
+    // at the wire layer would also be rejected by Alice on receipt because
+    // handleEnvelope's 'close' case checks env.from === creatorPubkey.
+    expect(() => roomB.closeRoom()).toThrow(/creator/i);
+    expect(roomA.closedAt).toBeNull();
+    expect(roomB.closedAt).toBeNull();
+
+    a.close();
+    b.close();
+  });
+
   it('forged kick from a non-creator is silently dropped', async () => {
     const broker = new InMemoryBroker();
     const alice = makeIdentity(); // creator

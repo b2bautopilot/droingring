@@ -618,6 +618,7 @@ export const UI_HTML = `<!doctype html>
           Share
         </button>
         <button class="btn ghost" id="btn-admission" title="Admission mode">Open</button>
+        <button class="btn ghost" id="btn-leave" title="Leave">Leave</button>
         <button class="btn icon ghost" id="btn-aside" title="Members">
           <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </button>
@@ -969,6 +970,14 @@ export const UI_HTML = `<!doctype html>
     $('room-topic').textContent = room.topic || '';
     $('btn-admission').textContent = room.admission === 'approval' ? 'Approval' : 'Open';
     $('btn-admission').classList.toggle('danger', room.admission === 'approval');
+    // Creator's leave closes the room for everyone — flag the button so the
+    // confirm dialog knows which warning to show and the label matches.
+    const leaveBtn = $('btn-leave');
+    leaveBtn.textContent = room.is_creator ? 'Close room' : 'Leave';
+    leaveBtn.classList.toggle('danger', !!room.is_creator);
+    leaveBtn.title = room.is_creator
+      ? 'Close this room for everyone (you are the creator)'
+      : 'Leave this room';
 
     const [memRes, msgRes, pendRes] = await Promise.all([
       api('/api/rooms/' + room.id + '/members'),
@@ -1150,6 +1159,10 @@ export const UI_HTML = `<!doctype html>
                  msg.type === 'member_joined' ||
                  msg.type === 'members_update' ||
                  msg.type === 'member_kicked') {
+        refreshRooms();
+      } else if (msg.type === 'room_closed') {
+        toast('Room "' + msg.name + '" was closed by the creator.', 'warn');
+        if (msg.room_id === activeRoomId) activeRoomId = null;
         refreshRooms();
       }
     });
@@ -1343,6 +1356,22 @@ export const UI_HTML = `<!doctype html>
         method: 'POST', body: JSON.stringify({ mode: next }),
       });
       toast('Admission: ' + next);
+      await refreshRooms();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+
+  $('btn-leave').addEventListener('click', async () => {
+    if (!activeRoomId) return;
+    const room = rooms.find((r) => r.id === activeRoomId);
+    if (!room) return;
+    const prompt = room.is_creator
+      ? 'Close "' + room.name + '" for everyone? Other members will be disconnected and the invite ticket will stop working.'
+      : 'Leave "' + room.name + '"?';
+    if (!confirm(prompt)) return;
+    try {
+      await api('/api/rooms/' + activeRoomId + '/leave', { method: 'POST' });
+      toast(room.is_creator ? 'Room closed.' : 'Left.');
+      activeRoomId = null;
       await refreshRooms();
     } catch (e) { toast(e.message, 'err'); }
   });
