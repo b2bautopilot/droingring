@@ -1,13 +1,11 @@
 import { Box, Text, render, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { bytesToHex } from '../p2p/format.js';
 import type { RoomManager } from '../p2p/manager.js';
 import type { PendingRequest, Room } from '../p2p/room.js';
 import type { Repo } from '../store/repo.js';
 import { createTuiClient } from './client.js';
-
-// ----- types ------------------------------------------------------------
 
 interface Msg {
   id: string;
@@ -38,8 +36,6 @@ interface PendingView {
   pubkey: string;
   nickname: string;
 }
-
-// ----- helpers ----------------------------------------------------------
 
 function fmtTime(iso: string): string {
   try {
@@ -110,8 +106,6 @@ async function tryCopy(text: string): Promise<boolean> {
   return false;
 }
 
-// ----- root app ---------------------------------------------------------
-
 function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -136,20 +130,42 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
   const [members, setMembers] = useState<MemberView[]>([]);
   const [pending, setPending] = useState<PendingView[]>([]);
   const [status, setStatus] = useState('ready');
-  const [overlay, setOverlay] = useState<'help' | 'invite' | null>(null);
-  const [overlayText, setOverlayText] = useState('');
+  const [overlay, setOverlay] = useState<{ kind: 'help' | 'invite'; text: string } | null>(null);
   const [nickname, setNickname] = useState(manager.getNickname());
 
-  const refreshRooms = useCallback(() => {
-    const list = [...manager.rooms.values()].map((r) => roomToView(r));
+  // `activeRoomId` inside async callbacks must read the latest value without
+  // forcing the subscribe effect to re-run — keep a ref in sync.
+  const activeRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeRef.current = activeRoomId;
+  }, [activeRoomId]);
+
+  const mineHex = useMemo(() => bytesToHex(manager.identity.publicKey), [manager]);
+
+  // Cap in-memory message buffer. We only render the last ~rows-9 anyway, so
+  // keeping 500 is plenty of scrollback without the O(n) spread tax on every
+  // incoming message in long-lived rooms.
+  const MAX_MESSAGES = 500;
+
+  const rowToMsg = useCallback(
+    (r: any): Msg => ({
+      id: r.id,
+      room_id: r.room_id,
+      nickname: r.nickname,
+      sender: r.sender,
+      text: r.text,
+      ts: r.ts,
+    }),
+    [],
+  );
+
+  const snapshotRooms = useCallback(() => {
+    const list = [...manager.rooms.values()].map(roomToView);
     setRooms(list);
-    setActiveRoomId((cur) => {
-      if (cur && list.some((r) => r.id === cur)) return cur;
-      return list[0]?.id ?? null;
-    });
+    setActiveRoomId((cur) => (cur && list.some((r) => r.id === cur) ? cur : (list[0]?.id ?? null)));
   }, [manager]);
 
-  const refreshActive = useCallback(
+  const snapshotActive = useCallback(
     (roomId: string | null) => {
       if (!roomId) {
         setMessages([]);
@@ -158,73 +174,79 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
         return;
       }
       const room = manager.rooms.get(roomId);
-      const rows = repo.fetchMessages(roomId, 200);
-      setMessages(
-        rows.map((r) => ({
-          id: r.id,
-          room_id: r.room_id,
-          nickname: r.nickname,
-          sender: r.sender,
-          text: r.text,
-          ts: r.ts,
-        })),
-      );
+      setMessages(repo.fetchMessages(roomId, 200).map(rowToMsg));
       setMembers(membersOfRoom(room, manager.identity.publicKey));
       setPending(pendingOfRoom(room));
     },
-    [manager, repo],
+    [manager, repo, rowToMsg],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshRooms is stable.
+  // Subscribe once per manager lifetime. activeRoomId lives in a ref so
+  // handlers see the current value without re-subscribing on every switch.
+  // Per-room join_request listeners are tracked in `bound` so cleanup can
+  // remove every one — this was the leak that stacked handlers on each
+  // room-switch in the previous implementation.
   useEffect(() => {
-    refreshRooms();
+    const bound = new Map<string, (p: any) => void>();
+    const bindRoom = (r: Room) => {
+      if (bound.has(r.idHex)) return;
+      const handler = () => {
+        if (activeRef.current === r.idHex) setPending(pendingOfRoom(r));
+        snapshotRooms();
+      };
+      r.on('join_request', handler);
+      bound.set(r.idHex, handler);
+    };
+    for (const r of manager.rooms.values()) bindRoom(r);
+
     const onMessage = (row: any) => {
-      if (row.room_id === activeRoomId) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: row.id,
-            room_id: row.room_id,
-            nickname: row.nickname,
-            sender: row.sender,
-            text: row.text,
-            ts: row.ts,
-          },
-        ]);
-      }
-      refreshRooms();
+      // A new message doesn't change room metadata — skip snapshotRooms.
+      if (row.room_id !== activeRef.current) return;
+      setMessages((prev) => {
+        const next =
+          prev.length >= MAX_MESSAGES
+            ? [...prev.slice(prev.length - MAX_MESSAGES + 1), rowToMsg(row)]
+            : [...prev, rowToMsg(row)];
+        return next;
+      });
     };
     const onMembers = () => {
-      refreshRooms();
-      if (activeRoomId) {
-        setMembers(membersOfRoom(manager.rooms.get(activeRoomId), manager.identity.publicKey));
-      }
+      snapshotRooms();
+      const r = activeRef.current ? manager.rooms.get(activeRef.current) : undefined;
+      if (r) setMembers(membersOfRoom(r, manager.identity.publicKey));
     };
-    const onJoinReq = (_p: unknown, room: Room) => {
-      refreshRooms();
-      if (activeRoomId === room.idHex) setPending(pendingOfRoom(room));
+    const onRoomAppeared = (_: unknown, r: Room) => {
+      bindRoom(r);
+      snapshotRooms();
     };
+    const onRoomKicked = () => snapshotRooms();
+
     manager.on('message', onMessage);
     manager.on('members_update', onMembers);
     manager.on('member_joined', onMembers);
-    manager.on('member_kicked', onMembers);
-    // join_request fires on Room, not Manager. Subscribe per room.
-    const bindRoom = (r: Room) => r.on('join_request', () => onJoinReq(null, r));
-    for (const r of manager.rooms.values()) bindRoom(r);
-    manager.on('member_joined', (_: unknown, r: Room) => bindRoom(r));
+    manager.on('member_joined', onRoomAppeared);
+    manager.on('member_kicked', onRoomKicked);
+
+    snapshotRooms();
+
     return () => {
       manager.off('message', onMessage);
       manager.off('members_update', onMembers);
       manager.off('member_joined', onMembers);
-      manager.off('member_kicked', onMembers);
+      manager.off('member_joined', onRoomAppeared);
+      manager.off('member_kicked', onRoomKicked);
+      for (const [id, fn] of bound) {
+        const r = manager.rooms.get(id);
+        if (r) r.off('join_request', fn);
+      }
+      bound.clear();
     };
-  }, [manager, activeRoomId]);
+  }, [manager, rowToMsg, snapshotRooms]);
 
   useEffect(() => {
-    refreshActive(activeRoomId);
-  }, [activeRoomId, refreshActive]);
+    snapshotActive(activeRoomId);
+  }, [activeRoomId, snapshotActive]);
 
-  // ----- key bindings -----
   useInput((ch, key) => {
     if (overlay) {
       if (key.escape || ch === 'q') setOverlay(null);
@@ -256,8 +278,7 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
   }
 
   function openHelp() {
-    setOverlayText(HELP_TEXT);
-    setOverlay('help');
+    setOverlay({ kind: 'help', text: HELP_TEXT });
   }
 
   async function onSubmit(line: string) {
@@ -303,16 +324,15 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
           if (!name) return setStatus('usage: /create <name>');
           const admission = args[1] === 'approval' ? 'approval' : 'open';
           const room = await manager.createRoom(name, undefined, admission);
-          refreshRooms();
+          snapshotRooms();
           setActiveRoomId(room.idHex);
-          setOverlayText(formatInvite(room));
-          setOverlay('invite');
+          setOverlay({ kind: 'invite', text: formatInvite(room) });
           return;
         }
         case 'join': {
           if (!rest) return setStatus('usage: /join <ticket>');
           const room = await manager.joinByTicket(rest);
-          refreshRooms();
+          snapshotRooms();
           setActiveRoomId(room.idHex);
           setStatus(`joined ${room.name}`);
           return;
@@ -321,8 +341,7 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
         case 'share': {
           const room = currentRoom();
           if (!room) return setStatus('no active room');
-          setOverlayText(formatInvite(room));
-          setOverlay('invite');
+          setOverlay({ kind: 'invite', text: formatInvite(room) });
           return;
         }
         case 'leave': {
@@ -330,7 +349,7 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
           if (!target) return setStatus('no room to leave');
           await manager.leaveRoom(target);
           setActiveRoomId(null);
-          refreshRooms();
+          snapshotRooms();
           setStatus(`left ${target}`);
           return;
         }
@@ -349,7 +368,7 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
           const room = currentRoom();
           if (!room) return setStatus('no active room');
           room.setAdmissionMode(mode);
-          refreshRooms();
+          snapshotRooms();
           setStatus(`admission = ${mode}`);
           return;
         }
@@ -369,8 +388,8 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
           if (!ok) setStatus('request no longer pending');
           else {
             setStatus(verb === 'approve' ? 'approved' : 'denied');
-            refreshActive(activeRoomId);
-            refreshRooms();
+            snapshotActive(activeRoomId);
+            snapshotRooms();
           }
           return;
         }
@@ -427,7 +446,6 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
     ].join('\n');
   }
 
-  // ----- render -----
   const activeRoom = useMemo(() => rooms.find((r) => r.id === activeRoomId), [rooms, activeRoomId]);
   const showAside = cols >= 100;
   const sidebarWidth = Math.min(28, Math.max(16, Math.floor(cols * 0.22)));
@@ -446,10 +464,10 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
         >
           <Box marginBottom={1}>
             <Text bold color="cyanBright">
-              {overlay === 'help' ? '?  Help' : '◆  Invite'}
+              {overlay.kind === 'help' ? '?  Help' : '◆  Invite'}
             </Text>
           </Box>
-          {overlayText.split('\n').map((line, i) => (
+          {overlay.text.split('\n').map((line, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: static text; index is identity.
             <Text key={`ov-${i}`}>{line || ' '}</Text>
           ))}
@@ -463,8 +481,6 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
 
   const accentColor = activeRoomId ? 'cyan' : 'gray';
   const rule = (n: number) => '─'.repeat(Math.max(n, 4));
-  const mineHex = bytesToHex(manager.identity.publicKey);
-
   return (
     <Box flexDirection="column" height={rows}>
       <Box flexGrow={1} minHeight={0}>
