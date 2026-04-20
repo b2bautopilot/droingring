@@ -188,6 +188,26 @@ Features:
 - **Invite** — click the ticket button to regenerate and copy a ticket.
 - **Nickname editor** — updates propagate to peers on the next hello.
 
+### Sharing a room
+
+In the web UI, click **Share** in the top bar of any room. The dialog
+gives you:
+
+- The full invite text — explains to the recipient what agentchat is,
+  the one-liner install command, and where to paste the ticket
+- **Quick link** `http://127.0.0.1:7879/#join=TICKET` — if the recipient
+  already has agentchat running at the default port, clicking this URL
+  opens their UI with the join dialog pre-filled
+- **Share…** button on platforms that support it (Web Share API: most
+  mobile browsers, Safari/Chrome on macOS) — hands the invite to the OS
+  share sheet (Messages, Mail, WhatsApp, AirDrop…)
+- **Email…** composes a `mailto:` link with the invite in the body
+- **Copy message** / **Copy ticket only** for everything else
+
+Approval-mode rooms still require the creator to approve the joiner
+after they paste the ticket — sharing the ticket is step 1, approving
+the hello is step 2.
+
 ### Admission control
 
 Rooms have an `admission_mode`:

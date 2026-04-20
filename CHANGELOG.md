@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.4 — 2026-04-20
+
+- **Share flow.** The topbar "Invite" button is now a primary "Share"
+  action. Clicking it opens a dialog that shows a pre-composed invite
+  message — explains what agentchat is, the one-liner install command,
+  how to open the web UI, and the ticket itself — plus a one-click
+  "Quick link" in the form `http://127.0.0.1:7879/#join=TICKET` that
+  opens the recipient's own agentchat UI with the join dialog already
+  pre-filled.
+- **Platform-native share sheet.** When `navigator.share` is available
+  (most mobile browsers, Safari and Chrome on macOS) a "Share…" button
+  appears that hands the invite to the OS share sheet (Messages, Mail,
+  WhatsApp, AirDrop, etc.). Auto-hidden when unsupported.
+- **Email shortcut.** A "Email…" button composes a `mailto:?subject=…
+  &body=…` link with the subject pre-filled and the full invite in the
+  body.
+- **Copy split into two buttons.** "Copy message" (full invite text with
+  install instructions) and "Copy ticket only" (just the base32 string).
+- **`#join=TICKET` deep link.** If the UI loads with this hash in the
+  URL, the join dialog opens automatically with the ticket pre-filled.
+  Stashed across the token-entry step if the user isn't signed in yet,
+  so the link works for first-time users too.
+
 ## 0.3.3 — 2026-04-20
 
 - **Web UI redesign.** ChatGPT-style layout: sticky top bar, scrollable

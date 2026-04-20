@@ -546,7 +546,10 @@ export const UI_HTML = `<!doctype html>
         <span class="topic" id="room-topic"></span>
       </div>
       <div class="actions">
-        <button class="btn" id="btn-invite" title="Copy invite ticket">Invite</button>
+        <button class="btn primary" id="btn-share" title="Share this room">
+          <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+          Share
+        </button>
         <button class="btn ghost" id="btn-admission" title="Admission mode">Open</button>
         <button class="btn icon ghost" id="btn-aside" title="Members">
           <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -621,13 +624,30 @@ export const UI_HTML = `<!doctype html>
   </div>
 </dialog>
 
-<dialog id="invite-dialog">
-  <h2>Invite ticket</h2>
-  <p style="color:var(--text-dim);margin:0 0 10px;">Share this with the person you want to add.</p>
-  <div class="ticket-box" id="invite-text"></div>
-  <div class="actions">
-    <button type="button" class="btn primary" id="copy-btn">Copy</button>
+<dialog id="share-dialog">
+  <h2 id="share-title">Share room</h2>
+  <p style="color:var(--text-dim);margin:0 0 12px;font-size:13px;">
+    Anyone you send this to can join. Messages in the room are end-to-end
+    encrypted; you'll still need to approve them first if admission is set to "Approval".
+  </p>
+
+  <div class="field">
+    <label>Invite message <span style="color:var(--text-muted);font-weight:400;">(what to send)</span></label>
+    <textarea id="share-message" rows="10" readonly spellcheck="false"
+      style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;"></textarea>
+  </div>
+
+  <details style="margin:6px 0 10px;">
+    <summary style="cursor:pointer;font-size:12px;color:var(--text-dim);">Just the ticket</summary>
+    <div class="ticket-box" id="share-ticket" style="margin-top:8px;"></div>
+  </details>
+
+  <div class="actions" style="flex-wrap:wrap;">
     <button type="button" class="btn" value="close">Close</button>
+    <button type="button" class="btn" id="share-copy-ticket">Copy ticket only</button>
+    <button type="button" class="btn" id="share-email">Email…</button>
+    <button type="button" class="btn hidden" id="share-native">Share…</button>
+    <button type="button" class="btn primary" id="share-copy-msg">Copy message</button>
   </div>
 </dialog>
 
@@ -669,8 +689,9 @@ export const UI_HTML = `<!doctype html>
   }
   applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
 
-  // ------- token bootstrap -------
+  // ------- token + join bootstrap -------
   const TOKEN_KEY = 'agentchat_token';
+  const PENDING_JOIN_KEY = 'agentchat_pending_join';
   function bootstrapToken() {
     const m = /^#token=([0-9a-fA-F]{64})$/.exec(location.hash);
     if (m) {
@@ -679,6 +700,17 @@ export const UI_HTML = `<!doctype html>
       return m[1];
     }
     return sessionStorage.getItem(TOKEN_KEY);
+  }
+  function consumePendingJoin() {
+    // Recognise share links in the form /#join=<ticket>. We stash the ticket
+    // across the login round-trip so it works even if the user has to enter
+    // the access token first.
+    const m = /^#join=([A-Za-z0-9]+)$/.exec(location.hash);
+    if (m) {
+      sessionStorage.setItem(PENDING_JOIN_KEY, m[1]);
+      history.replaceState(null, '', location.pathname);
+    }
+    return sessionStorage.getItem(PENDING_JOIN_KEY);
   }
 
   const $ = (id) => document.getElementById(id);
@@ -739,6 +771,14 @@ export const UI_HTML = `<!doctype html>
       renderMe();
       await refreshRooms();
       openWs();
+      // If the user arrived via a /#join=... share link, open the join
+      // dialog pre-filled with the ticket (stashed across the login step).
+      const pending = sessionStorage.getItem(PENDING_JOIN_KEY);
+      if (pending) {
+        sessionStorage.removeItem(PENDING_JOIN_KEY);
+        $('join-ticket').value = pending;
+        openDialog('join-dialog');
+      }
     } catch (e) {
       sessionStorage.removeItem(TOKEN_KEY);
       $('login').classList.remove('hidden');
@@ -1061,24 +1101,95 @@ export const UI_HTML = `<!doctype html>
     } catch (e) { toast('Join failed: ' + e.message, 'err'); }
   });
 
-  $('btn-invite').addEventListener('click', async () => {
+  function composeInvite(roomName, ticket) {
+    const quickLink = location.origin + '/#join=' + ticket;
+    return [
+      'You\\'re invited to "' + roomName + '" on agentchat',
+      '(peer-to-peer, end-to-end encrypted chat).',
+      '',
+      '── How to join ─────────────────────────',
+      '',
+      '1. Install agentchat (macOS / Linux):',
+      '   curl -fsSL https://raw.githubusercontent.com/amazedsaint/agentchat/main/install.sh | sh',
+      '',
+      '2. Start the web UI:',
+      '   agentchat web',
+      '   (it also auto-launches when Claude Code or another MCP client spawns agentchat-mcp)',
+      '',
+      '3. In the UI, click the "join" icon (top-left) and paste this ticket:',
+      '',
+      '   ' + ticket,
+      '',
+      'Already running agentchat at the default port? One-click join:',
+      '   ' + quickLink,
+      '',
+      'More: https://github.com/amazedsaint/agentchat',
+    ].join('\\n');
+  }
+
+  function doCopy(text, done) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done || (() => toast('Copied.')))
+        .catch(() => toast('Copy failed — select the text and copy manually.', 'warn'));
+      return;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try {
+      document.execCommand('copy');
+      (done || (() => toast('Copied.')))();
+    } catch (_) {
+      toast('Copy failed — select the text and copy manually.', 'warn');
+    } finally {
+      ta.remove();
+    }
+  }
+
+  let currentShareTicket = '';
+  let currentShareRoom = '';
+
+  async function openShareDialog() {
     if (!activeRoomId) return;
+    const room = rooms.find((r) => r.id === activeRoomId);
     try {
       const r = await api('/api/rooms/' + activeRoomId + '/invite');
-      $('invite-text').textContent = r.ticket;
-      openDialog('invite-dialog');
+      currentShareTicket = r.ticket;
+      currentShareRoom = room ? room.name : 'room';
+      $('share-title').textContent = 'Share ' + (room ? '#' + room.name.replace(/^#/, '') : 'room');
+      $('share-message').value = composeInvite(currentShareRoom, currentShareTicket);
+      $('share-ticket').textContent = currentShareTicket;
+      // Show native share button only if the platform supports it.
+      $('share-native').classList.toggle(
+        'hidden', !(navigator.share && navigator.canShare),
+      );
+      openDialog('share-dialog');
     } catch (e) { toast(e.message, 'err'); }
+  }
+
+  $('btn-share').addEventListener('click', openShareDialog);
+
+  $('share-copy-msg').addEventListener('click', () => {
+    doCopy($('share-message').value, () => toast('Invite message copied.'));
   });
-  $('copy-btn').addEventListener('click', () => {
-    const t = $('invite-text').textContent;
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(t).then(() => toast('Copied.'));
-    } else {
-      const r = document.createRange(); r.selectNode($('invite-text'));
-      getSelection().removeAllRanges(); getSelection().addRange(r);
-      try { document.execCommand('copy'); toast('Copied.'); }
-      catch (_) { toast('Select the ticket and copy manually.', 'warn'); }
-    }
+  $('share-copy-ticket').addEventListener('click', () => {
+    doCopy(currentShareTicket, () => toast('Ticket copied.'));
+  });
+  $('share-email').addEventListener('click', () => {
+    const subject = 'Invite: join "' + currentShareRoom + '" on agentchat';
+    const body = $('share-message').value;
+    location.href = 'mailto:?subject=' + encodeURIComponent(subject)
+      + '&body=' + encodeURIComponent(body);
+  });
+  $('share-native').addEventListener('click', async () => {
+    if (!(navigator.share && navigator.canShare)) return;
+    const payload = {
+      title: 'Join "' + currentShareRoom + '" on agentchat',
+      text: $('share-message').value,
+    };
+    if (!navigator.canShare(payload)) { toast('Share sheet unavailable.', 'warn'); return; }
+    try { await navigator.share(payload); }
+    catch (_) { /* user cancelled */ }
   });
 
   $('btn-admission').addEventListener('click', async () => {
@@ -1154,6 +1265,7 @@ export const UI_HTML = `<!doctype html>
   });
 
   // ------- boot -------
+  consumePendingJoin();
   if (token) login(); else $('login').classList.remove('hidden');
 })();
 </script>
