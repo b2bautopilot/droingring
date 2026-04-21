@@ -198,6 +198,52 @@ describe('Room two-peer loopback', () => {
     c.close();
   });
 
+  it('members gossip from a non-creator is rejected', async () => {
+    const broker = new InMemoryBroker();
+    const alice = makeIdentity(); // creator
+    const bob = makeIdentity();
+    const carol = makeIdentity();
+    const a = tmpDb();
+    const b = tmpDb();
+    const c = tmpDb();
+    const rootSecret = randomKey();
+    const roomName = '#no-forge-members';
+
+    const roomA = buildRoom(roomName, rootSecret, alice.publicKey, alice, a.repo, broker);
+    roomA.initSelf('alice');
+    const roomB = buildRoom(roomName, rootSecret, alice.publicKey, bob, b.repo, broker);
+    roomB.sendHello('bob', 't', '0');
+    const roomC = buildRoom(roomName, rootSecret, alice.publicKey, carol, c.repo, broker);
+    roomC.sendHello('carol', 't', '0');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(roomA.members.size).toBe(3);
+
+    // Bob (non-creator) fabricates a members envelope injecting a fake
+    // pubkey. The sendMembers helper is instance-local, so we invoke it
+    // directly on Bob's room — the forged envelope will carry Bob's sig.
+    const fakePubkey = new Uint8Array(32).fill(99);
+    (roomB as any).members.set('FAKEKEY_________________________________________________', {
+      pubkey: fakePubkey,
+      nickname: 'ghost',
+      joined_at: Date.now(),
+      x25519_pub: new Uint8Array(32).fill(1),
+      online: false,
+    });
+    roomB.sendMembers();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Alice and Carol should ignore the forged gossip — no ghost in their roster.
+    for (const room of [roomA, roomC]) {
+      for (const m of room.members.values()) {
+        expect(m.nickname).not.toBe('ghost');
+      }
+    }
+
+    a.close();
+    b.close();
+    c.close();
+  });
+
   it('kick + key rotation: kicked peer cannot decrypt subsequent messages', async () => {
     const broker = new InMemoryBroker();
     const alice = makeIdentity();

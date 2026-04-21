@@ -122,6 +122,32 @@ describe('RoomManager', () => {
     a.close();
   });
 
+  it('self_kicked tears down the room: drops from manager + marks left', async () => {
+    const alice = makeIdentity();
+    const { repo } = tmpDb();
+    const mgr = new RoomManager({
+      identity: alice,
+      repo,
+      nickname: 'alice',
+      clientName: 't',
+      version: '0',
+      swarm: new FakeSwarm(),
+    });
+    await mgr.start();
+    const room = await mgr.createRoom('#kickme');
+    // Simulate receiving the creator-signed kick targeting us by emitting
+    // 'self_kicked' directly — the envelope path is covered elsewhere.
+    let emitted = false;
+    mgr.on('room_kicked', (info: { room_id: string }) => {
+      if (info.room_id === room.idHex) emitted = true;
+    });
+    room.emit('self_kicked');
+    expect(emitted).toBe(true);
+    expect(mgr.rooms.has(room.idHex)).toBe(false);
+    // listRooms filters left_at IS NULL; after markRoomLeft it's excluded.
+    expect(repo.listRooms().some((r) => r.id === room.idHex)).toBe(false);
+  });
+
   it('ticket create + join roundtrips through manager', async () => {
     const alice = makeIdentity();
     const bob = makeIdentity();

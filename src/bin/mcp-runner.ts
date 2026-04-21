@@ -3,7 +3,7 @@ import { startHttpMcp } from '../mcp/http.js';
 import { buildServer } from '../mcp/server.js';
 import { loadConfig, loadOrCreateIdentity } from '../p2p/identity.js';
 import { RoomManager } from '../p2p/manager.js';
-import { openDatabase } from '../store/db.js';
+import { type DB, openDatabase } from '../store/db.js';
 import { Repo } from '../store/repo.js';
 
 const VERSION = '0.1.0';
@@ -17,6 +17,7 @@ export async function buildContextAndServer(): Promise<{
   server: any;
   manager: RoomManager;
   repo: Repo;
+  db: DB;
 }> {
   const identity = loadOrCreateIdentity();
   const config = loadConfig();
@@ -31,11 +32,55 @@ export async function buildContextAndServer(): Promise<{
   });
   await manager.start();
   const server = buildServer({ ctx: { manager, repo }, version: VERSION });
-  return { server, manager, repo };
+  return { server, manager, repo, db };
+}
+
+/**
+ * Graceful shutdown — flush the WAL and close the sqlite handle. Without
+ * this, a kill -9 is fine (sqlite recovers from WAL), but normal SIGTERM
+ * / stdin-close on the stdio runner would leave the WAL un-checkpointed
+ * and the handle un-finalized. Registered once per process.
+ */
+let shutdownRegistered = false;
+function registerShutdown(db: DB, manager: RoomManager): void {
+  if (shutdownRegistered) return;
+  shutdownRegistered = true;
+  let ran = false;
+  const cleanup = () => {
+    if (ran) return;
+    ran = true;
+    // Best-effort — swallow errors so we still exit.
+    manager.stop().catch(() => {});
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      /* ignore */
+    }
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+  };
+  process.once('SIGINT', () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.once('SIGTERM', () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.once('beforeExit', cleanup);
+  // Stdio MCP sessions end when the client closes stdin.
+  process.stdin.once('end', () => {
+    cleanup();
+    process.exit(0);
+  });
 }
 
 export async function runStdioServer(opts: { web?: boolean } = {}): Promise<void> {
-  const { server, manager, repo } = await buildContextAndServer();
+  const { server, manager, repo, db } = await buildContextAndServer();
+  registerShutdown(db, manager);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   if (opts.web) await launchWebSidecar(manager, repo);
@@ -102,7 +147,8 @@ async function launchWebSidecar(manager: RoomManager, repo: Repo): Promise<void>
 }
 
 export async function runHttpServer(host: string, port: number): Promise<void> {
-  const { manager, repo } = await buildContextAndServer();
+  const { manager, repo, db } = await buildContextAndServer();
+  registerShutdown(db, manager);
   startHttpMcp({
     host,
     port,

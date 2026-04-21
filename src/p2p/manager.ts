@@ -68,6 +68,16 @@ export class RoomManager extends EventEmitter {
   }
   setNickname(nick: string): void {
     this.nickname = nick;
+    // Re-broadcast hello to every active room so peers learn the new
+    // nickname without waiting for a reconnect. Best-effort — silent on
+    // error because a swarm that's mid-teardown may refuse a write.
+    for (const room of this.rooms.values()) {
+      try {
+        room.sendHello(this.nickname, this.clientName, this.version);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async start(): Promise<void> {
@@ -159,6 +169,19 @@ export class RoomManager extends EventEmitter {
           /* already gone is fine */
         });
       }
+    });
+    // Creator kicked us: room.ts deletes the local member row and emits
+    // 'self_kicked', but without this we'd keep the Room in memory and stay
+    // joined to the swarm topic — silently receiving traffic we can no
+    // longer decrypt after the creator's rotate_key. Tear it down the same
+    // way a remote-close would.
+    room.on('self_kicked', () => {
+      this.emit('room_kicked', { room_id: room.idHex, name: room.name }, room);
+      this.rooms.delete(room.idHex);
+      this.repo.markRoomLeft(room.idHex);
+      this.swarm.leaveTopic(room.id).catch(() => {
+        /* already gone is fine */
+      });
     });
     this.rooms.set(room.idHex, room);
   }

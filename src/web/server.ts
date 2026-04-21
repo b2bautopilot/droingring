@@ -93,6 +93,15 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServerH
       socket.end('HTTP/1.1 421 Misdirected Request\r\n\r\n');
       return;
     }
+    // Cross-site WebSocket hijacking defense: the Origin header is the only
+    // reliable signal of which site initiated the handshake (unlike Host,
+    // which a same-origin attacker can't forge but a different-origin page
+    // can't influence anyway). Bearer-token auth already requires the
+    // attacker to know the token, but defence-in-depth is cheap here.
+    if (!originAllowed(req.headers.origin)) {
+      socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+      return;
+    }
     const url = new URL(req.url || '/', `http://${host}:${port}`);
     const presented = extractBearer(
       req.headers.authorization,
@@ -116,6 +125,28 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServerH
     if (!hostHeader) return false;
     if (host === '0.0.0.0' || host === '::' || host === '::0') return true;
     const name = hostHeader.split(':')[0].toLowerCase();
+    return (
+      name === host.toLowerCase() ||
+      name === 'localhost' ||
+      name === '127.0.0.1' ||
+      name === '[::1]' ||
+      name === '::1'
+    );
+  }
+
+  function originAllowed(originHeader: string | undefined): boolean {
+    // Non-browser clients (curl, node ws) often omit Origin — the bearer
+    // token is sufficient for them. Only reject when Origin is present and
+    // doesn't match our allowlist.
+    if (!originHeader) return true;
+    if (host === '0.0.0.0' || host === '::' || host === '::0') return true;
+    let parsed: URL;
+    try {
+      parsed = new URL(originHeader);
+    } catch {
+      return false;
+    }
+    const name = parsed.hostname.toLowerCase();
     return (
       name === host.toLowerCase() ||
       name === 'localhost' ||

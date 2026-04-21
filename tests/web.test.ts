@@ -272,6 +272,48 @@ describe('Web server', () => {
     }
   });
 
+  it('rejects WS upgrade with a disallowed Origin (CSWSH defense)', async () => {
+    const { srv, manager, close } = await bootServer();
+    try {
+      const { request } = await import('node:http');
+      const url = new URL(srv.url);
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = request({
+          host: url.hostname,
+          port: url.port,
+          path: '/ws?token=test-token-abcdef1234567890',
+          method: 'GET',
+          headers: {
+            Connection: 'Upgrade',
+            Upgrade: 'websocket',
+            'Sec-WebSocket-Version': '13',
+            'Sec-WebSocket-Key': Buffer.from('0123456789abcdef').toString('base64'),
+            Origin: 'http://evil.example.com',
+          },
+        });
+        req.on('upgrade', (res) => resolve(res.statusCode || 0));
+        req.on('response', (res) => resolve(res.statusCode || 0));
+        // Server closes socket after writing "HTTP/1.1 403 Forbidden\r\n\r\n"
+        // without going through upgrade — node emits this as an error, so
+        // we read the first line from the socket instead.
+        req.on('socket', (sock) => {
+          sock.once('data', (buf) => {
+            const line = buf.toString('latin1').split('\r\n')[0];
+            const match = line.match(/^HTTP\/1\.1 (\d{3})/);
+            resolve(match ? Number.parseInt(match[1], 10) : 0);
+          });
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      expect(status).toBe(403);
+    } finally {
+      await srv.close();
+      await manager.stop();
+      close();
+    }
+  });
+
   it('rejects malformed Bearer tokens with constant-time compare', async () => {
     const { srv, manager, close } = await bootServer();
     try {

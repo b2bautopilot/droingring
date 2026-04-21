@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.5.4 — 2026-04-21
+
+- **Nickname re-broadcast.** `manager.setNickname` now re-sends hello to
+  every active room so peers learn the new nickname immediately. Before
+  this, the tool description claimed "propagated on your next hello or
+  message" — but `sendMessage` doesn't re-hello, so the new name stayed
+  stuck on peers until the next swarm reconnect.
+- **Extensive multi-agent test coverage.** Added
+  `tests/e2e-multi-agent.test.ts` (10 tests driving 2–5 peers through
+  the real MCP tool surface via a shared in-memory swarm net) and
+  `tests/e2e-stdio.test.ts` (6 tests spawning the built
+  `agentchat-mcp` binary and driving JSON-RPC over stdio). Total test
+  count now 74 across 13 files.
+
+## 0.5.3 — 2026-04-21
+
+- **`fetchSince` cap.** `chat_tail` with no `since` used to return the
+  full `messages` table — a peer who flooded a room with millions of
+  messages could OOM any agent polling it. Capped at 500 most-recent
+  rows by default (still returned in ascending time order so existing
+  callers work unchanged). The bounded-`since` path now also takes a
+  `LIMIT`.
+- **FrameParser buffer cap.** The P2P CBOR frame parser had a 10 MB
+  per-frame cap but no bound on how much data could sit in its
+  pre-decode buffer. A slow-feed peer could push unbounded bytes as
+  long as no single frame exceeded the cap. Added a 16 MB total-buffer
+  cap (≈ 1.5× max frame) — overflow throws and the stream is torn down
+  by the swarm's existing error path.
+- **Graceful shutdown.** `runStdioServer` and `runHttpServer` now
+  register SIGINT/SIGTERM/`stdin end`/`beforeExit` handlers that stop
+  the swarm, checkpoint the WAL, and close the sqlite handle. Previous
+  behaviour left the WAL un-checkpointed on normal session end — safe,
+  but wasteful on disk and slower to reopen.
+
+## 0.5.2 — 2026-04-21
+
+- **WS buffer cap.** The `/ws` reader used to concat incoming chunks
+  into an ever-growing Buffer, so an authenticated peer that trickled
+  in bytes that never completed a frame could OOM the server. Hard cap
+  at 2 MB (2× the per-frame limit). Overflow closes the connection.
+- **Members gossip hardening.** `members` envelopes are now only
+  accepted from the room creator — same forgery guard as `kick` and
+  `close`. Previously any ticket-holder could forge a members envelope
+  and inject arbitrary pubkeys. The list is also validated per-field
+  (pubkey 32 bytes, x25519 32 bytes, nickname ≤ 128 chars, finite
+  joined_at) and capped at 10k entries per envelope.
+- **Roster cap.** `INBOUND_LIMITS.ROOM_MEMBERS` (10k) caps
+  `this.members` on both the hello path and members gossip, so a rogue
+  peer or a forged gossip can't drive unbounded map growth.
+
+## 0.5.1 — 2026-04-20
+
+- **Self-kick cleanup.** When the creator kicks you and rotates the key,
+  `RoomManager` now tears the room down on receipt of the `self_kicked`
+  event (drops from `manager.rooms`, marks left in sqlite, leaves the
+  swarm topic) and emits a `room_kicked` event. Previously the room
+  lingered in memory and the swarm connection stayed up silently
+  receiving undecryptable traffic.
+- **LWW clock clamp on notes + graph.** `applyNotePut` and
+  `applyGraphAssert` now clamp incoming `updated_at` to
+  `min(updated_at, now + 5 min)`. Without this a malicious peer could
+  stamp `updated_at = +Infinity` once and win every subsequent LWW
+  merge forever.
+- **Close-tombstone cleanup.** `markRoomClosed` now also deletes all
+  `join_requests` rows for the room. Previously pending approvals
+  re-hydrated as zombie rows on restart.
+- **WebSocket Origin check (CSWSH defense).** The `/ws` upgrade path
+  now validates the `Origin` header against the same host allowlist
+  used for DNS-rebind defense. Non-browser clients (curl, node ws) that
+  omit Origin are still allowed — they already present a Bearer token.
+  Browser pages on a foreign origin are now rejected with 403 before
+  the upgrade completes.
+
 ## 0.5.0 — 2026-04-20
 
 - **Zoom-style room close.** When the creator leaves a room (via `/chat

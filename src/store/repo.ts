@@ -1,5 +1,13 @@
 import type { DB } from './db.js';
 
+/**
+ * LWW tiebreaker skew cap. Incoming updated_at values get clamped to
+ * `now + FUTURE_SKEW_MS`, which bounds clock-skew forgiveness to 5 minutes.
+ * Without this a malicious peer could stamp updated_at = +Infinity and win
+ * every subsequent merge forever (since LWW picks the max).
+ */
+const FUTURE_SKEW_MS = 5 * 60 * 1000;
+
 export interface RoomRow {
   id: string;
   name: string;
@@ -102,6 +110,9 @@ export class Repo {
     this.db
       .prepare('UPDATE rooms SET closed_at = ?, left_at = COALESCE(left_at, ?) WHERE id = ?')
       .run(closed_at, new Date().toISOString(), id);
+    // Pending approvals are meaningless once the room is frozen — otherwise
+    // they'd sit in the table forever and re-hydrate as zombie rows on restart.
+    this.db.prepare('DELETE FROM join_requests WHERE room_id = ?').run(id);
   }
 
   isRoomClosed(id: string): boolean {
@@ -160,14 +171,21 @@ export class Repo {
     return rows.reverse();
   }
 
-  fetchSince(room_id: string, since?: string): MessageRow[] {
-    if (!since)
-      return this.db
-        .prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY ts ASC')
-        .all(room_id) as MessageRow[];
+  fetchSince(room_id: string, since?: string, limit = 500): MessageRow[] {
+    // Without a cap, `chat_tail` with no `since` returns the full table —
+    // a peer who flooded the room with millions of messages could OOM the
+    // agent process that polls it. Cap at `limit` most-recent rows and
+    // return them in ascending time order so existing callers (which
+    // assume asc order) keep working.
+    if (!since) {
+      const rows = this.db
+        .prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY ts DESC LIMIT ?')
+        .all(room_id, limit) as MessageRow[];
+      return rows.reverse();
+    }
     return this.db
-      .prepare('SELECT * FROM messages WHERE room_id = ? AND ts > ? ORDER BY ts ASC')
-      .all(room_id, since) as MessageRow[];
+      .prepare('SELECT * FROM messages WHERE room_id = ? AND ts > ? ORDER BY ts ASC LIMIT ?')
+      .all(room_id, since, limit) as MessageRow[];
   }
 
   touchContact(pubkey: string, nickname: string): void {
@@ -216,6 +234,7 @@ export class Repo {
     tags: string[];
     updated_at: number;
   }): boolean {
+    const updated_at = Math.min(row.updated_at, Date.now() + FUTURE_SKEW_MS);
     const existing = this.db
       .prepare(
         'SELECT updated_at, author, deleted, deleted_at FROM notes WHERE room_id = ? AND id = ?',
@@ -224,10 +243,10 @@ export class Repo {
       | { updated_at: number; author: string; deleted: number; deleted_at: number | null }
       | undefined;
     if (existing) {
-      if (existing.deleted && (existing.deleted_at ?? 0) >= row.updated_at) return false;
+      if (existing.deleted && (existing.deleted_at ?? 0) >= updated_at) return false;
       if (
-        existing.updated_at > row.updated_at ||
-        (existing.updated_at === row.updated_at && existing.author >= row.author)
+        existing.updated_at > updated_at ||
+        (existing.updated_at === updated_at && existing.author >= row.author)
       ) {
         return false;
       }
@@ -245,7 +264,7 @@ export class Repo {
            deleted=0,
            deleted_at=NULL`,
       )
-      .run({ ...row, tags: JSON.stringify(row.tags) });
+      .run({ ...row, updated_at, tags: JSON.stringify(row.tags) });
     return true;
   }
 
@@ -392,6 +411,7 @@ export class Repo {
     author: string;
     updated_at: number;
   }): boolean {
+    const updated_at = Math.min(row.updated_at, Date.now() + FUTURE_SKEW_MS);
     const existing = this.db
       .prepare(
         'SELECT updated_at, author, retracted, retracted_at FROM graph_edges WHERE room_id = ? AND id = ?',
@@ -400,10 +420,10 @@ export class Repo {
       | { updated_at: number; author: string; retracted: number; retracted_at: number | null }
       | undefined;
     if (existing) {
-      if (existing.retracted && (existing.retracted_at ?? 0) >= row.updated_at) return false;
+      if (existing.retracted && (existing.retracted_at ?? 0) >= updated_at) return false;
       if (
-        existing.updated_at > row.updated_at ||
-        (existing.updated_at === row.updated_at && existing.author >= row.author)
+        existing.updated_at > updated_at ||
+        (existing.updated_at === updated_at && existing.author >= row.author)
       ) {
         return false;
       }
@@ -427,7 +447,7 @@ export class Repo {
            retracted=0,
            retracted_at=NULL`,
       )
-      .run({ ...row, props: JSON.stringify(row.props) });
+      .run({ ...row, updated_at, props: JSON.stringify(row.props) });
     return true;
   }
 

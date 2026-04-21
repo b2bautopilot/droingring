@@ -10,6 +10,11 @@ import type { Duplex } from 'node:stream';
  */
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+/** Max buffered bytes between complete frames. A peer that trickles in
+ * partial frames without ever completing one would otherwise grow `buffer`
+ * without bound. 2 MB = 2× the single-frame cap, enough to tolerate any
+ * one-frame-in-flight plus overflow. */
+const WS_MAX_BUFFER = 2 * 1024 * 1024;
 
 export interface WsConnection {
   id: string;
@@ -55,6 +60,12 @@ export function acceptWebSocket(req: IncomingMessage, socket: Duplex): WsConnect
   };
 
   socket.on('data', (chunk: Buffer) => {
+    if (buffer.length + chunk.length > WS_MAX_BUFFER) {
+      // Trickle-in DoS: peer keeps sending bytes that never complete a frame.
+      // Cut them off rather than let the buffer grow forever.
+      close();
+      return;
+    }
     buffer = Buffer.concat([buffer, chunk]);
     while (true) {
       const frame = tryDecodeFrame(buffer);

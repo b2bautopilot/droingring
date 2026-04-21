@@ -72,7 +72,26 @@ export const INBOUND_LIMITS = {
   EPOCH_KEY_HISTORY: 16,
   /** Max pending join requests (approval-mode) — caps hostile hello floods. */
   PENDING_REQUESTS: 256,
+  /** Max members per room roster. Practical IRC-scale rooms are well under
+   * this; the cap exists to bound a forged-members gossip's memory blast. */
+  ROOM_MEMBERS: 10_000,
+  /** Max members per single members-gossip envelope. */
+  MEMBERS_GOSSIP: 10_000,
+  NICKNAME_CHARS: 128,
 };
+
+function validMembers(inner: InnerMembers): boolean {
+  if (!Array.isArray(inner.members)) return false;
+  if (inner.members.length > INBOUND_LIMITS.MEMBERS_GOSSIP) return false;
+  for (const m of inner.members) {
+    if (!(m.pubkey instanceof Uint8Array) || m.pubkey.length !== 32) return false;
+    if (!(m.x25519_pub instanceof Uint8Array) || m.x25519_pub.length !== 32) return false;
+    if (typeof m.nickname !== 'string' || m.nickname.length > INBOUND_LIMITS.NICKNAME_CHARS)
+      return false;
+    if (typeof m.joined_at !== 'number' || !Number.isFinite(m.joined_at)) return false;
+  }
+  return true;
+}
 
 function validMsg(inner: InnerMsg): boolean {
   if (typeof inner.text !== 'string' || inner.text.length > INBOUND_LIMITS.MSG_TEXT) return false;
@@ -509,6 +528,9 @@ export class Room extends EventEmitter {
           return true;
         }
 
+        // Bound the roster. An open-admission room would otherwise accept
+        // new hellos without limit from unique pubkeys.
+        if (!existing && this.members.size >= INBOUND_LIMITS.ROOM_MEMBERS) return false;
         const info: MemberInfo = {
           pubkey: env.from,
           nickname: inner.nickname,
@@ -530,8 +552,13 @@ export class Room extends EventEmitter {
         return true;
       }
       case 'members': {
+        // Only the creator gossips authoritative membership. Accepting it
+        // from any ticket-holder lets a rogue peer flood the roster with
+        // forged pubkeys (DoS) or mint UI-visible fake members. Same
+        // reasoning as 'kick' and 'close'.
+        if (Buffer.compare(env.from, this.creatorPubkey) !== 0) return false;
         const inner = openEnvelope<InnerMembers>(env, keys);
-        if (!inner) return false;
+        if (!inner || !validMembers(inner)) return false;
         const myKey = base32Encode(this.identity.publicKey);
         for (const m of inner.members) {
           const key = base32Encode(m.pubkey);
@@ -539,6 +566,7 @@ export class Room extends EventEmitter {
           // for our own nickname + x25519.
           if (key === myKey) continue;
           const existing = this.members.get(key);
+          if (!existing && this.members.size >= INBOUND_LIMITS.ROOM_MEMBERS) continue;
           const info: MemberInfo = {
             pubkey: m.pubkey,
             nickname: m.nickname,
