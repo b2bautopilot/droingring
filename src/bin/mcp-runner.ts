@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { startHttpMcp } from '../mcp/http.js';
 import { buildServer } from '../mcp/server.js';
+import { deriveRoomId } from '../p2p/crypto.js';
 import { loadConfig, loadOrCreateIdentity } from '../p2p/identity.js';
 import { RoomManager } from '../p2p/manager.js';
 import { clientKind } from '../p2p/room.js';
 import { type DB, openDatabase } from '../store/db.js';
 import { Repo } from '../store/repo.js';
+import { detectRepoRoom } from './repo-detect.js';
 
 const VERSION = '0.1.0';
 const SESSION_HEARTBEAT_MS = 30_000;
@@ -167,19 +169,12 @@ async function maybeJoinRepoRoom(
   session?: { tagRepo: (roomId: string, roomName: string) => void },
 ): Promise<void> {
   if (process.env.AGENTCHAT_NO_REPO_ROOM === '1') return;
-  const { detectRepoRoom } = await import('./repo-detect.js');
   const hit = detectRepoRoom();
   if (!hit) return;
   try {
-    const roomIdBytes = (await import('../p2p/crypto.js')).deriveRoomId(
-      hit.roomName,
-      hit.rootSecret,
-    );
-    const roomIdHex = Buffer.from(roomIdBytes).toString('hex');
+    const roomIdHex = Buffer.from(deriveRoomId(hit.roomName, hit.rootSecret)).toString('hex');
     const alreadyHad = manager.rooms.has(roomIdHex);
     await manager.joinOrCreateLeaderlessRoom(hit.roomName, hit.rootSecret, hit.leaderlessCreator);
-    // Tag the session with the repo it's working in so the web UI can group
-    // "My sessions" by repo. Safe if session is undefined.
     session?.tagRepo(roomIdHex, hit.roomName);
     if (!alreadyHad) {
       process.stderr.write(

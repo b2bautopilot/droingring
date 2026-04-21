@@ -1042,24 +1042,16 @@ export const UI_HTML = `<!doctype html>
       }
       body.appendChild(ul);
     }
-    // Self-only: active sessions grouped by repo.
     if (p.is_self && p.sessions && p.sessions.length) {
       const h = document.createElement('div'); h.className = 'profile-section';
       h.textContent = 'My sessions (' + p.sessions.length + ')';
       body.appendChild(h);
-      const groups = new Map();
-      for (const s of p.sessions) {
-        const k = s.repo_name || '';
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k).push(s);
-      }
       const ul = document.createElement('ul'); ul.className = 'profile-list';
-      for (const [repoName, sess] of [...groups.entries()].sort()) {
+      for (const [repoName, sess] of groupSessionsByRepo(p.sessions)) {
         for (const s of sess) {
           const li = document.createElement('li');
-          const emoji = s.kind === 'agent' ? '\u{1F916}' : s.kind === 'human' ? '\u{1F464}' : '\u{00B7}';
           const repoPrefix = repoName ? '\u{1F517} ' + repoName + ' · ' : '';
-          li.textContent = emoji + ' ' + repoPrefix + s.client + ' (pid ' + s.pid + ')';
+          li.textContent = sessionEmoji(s) + ' ' + repoPrefix + s.client + ' (pid ' + s.pid + ')';
           ul.appendChild(li);
         }
       }
@@ -1067,7 +1059,21 @@ export const UI_HTML = `<!doctype html>
     }
   }
 
+  function groupSessionsByRepo(sessions) {
+    const groups = new Map();
+    for (const s of sessions) {
+      const key = s.repo_name || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+    return [...groups.entries()].sort();
+  }
+  function sessionEmoji(s) {
+    return s.kind === 'agent' ? '\u{1F916}' : s.kind === 'human' ? '\u{1F464}' : '\u{00B7}';
+  }
+
   // ------- sessions -------
+  let lastSessionsKey = '';
   async function refreshSessions() {
     try {
       const r = await api('/api/sessions');
@@ -1075,6 +1081,14 @@ export const UI_HTML = `<!doctype html>
     } catch (_) { /* ignore — web is usable without this */ }
   }
   function renderSessions(sessions) {
+    // Change-detection: skip DOM rebuild when the 15s poll returns an
+    // identical payload (tooltip state + layout survive).
+    const key = JSON.stringify(
+      sessions.map((s) => [s.id, s.last_seen, s.repo_name, s.client, s.pid]),
+    );
+    if (key === lastSessionsKey) return;
+    lastSessionsKey = key;
+
     const box = $('sessions-list'); box.textContent = '';
     $('sessions-header').textContent = 'My sessions · ' + sessions.length;
     if (sessions.length === 0) {
@@ -1086,32 +1100,24 @@ export const UI_HTML = `<!doctype html>
       box.appendChild(hint);
       return;
     }
-    // Group sessions by repo_name. Sessions with no repo_name fall under
-    // "(no repo)" so the user can still see them.
-    const groups = new Map();
-    for (const s of sessions) {
-      const key = s.repo_name || '';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(s);
-    }
-    const groupKeys = [...groups.keys()].sort();
-    for (const repoName of groupKeys) {
+    const grouped = groupSessionsByRepo(sessions);
+    const hasMultipleGroups = grouped.length > 1;
+    for (const [repoName, group] of grouped) {
       if (repoName) {
         const h = document.createElement('div');
         h.className = 'sessions-group-header';
         h.textContent = '\u{1F517} ' + repoName;
         box.appendChild(h);
-      } else if (groups.size > 1) {
+      } else if (hasMultipleGroups) {
         const h = document.createElement('div');
         h.className = 'sessions-group-header';
         h.textContent = '\u{1F4E6} no repo';
         box.appendChild(h);
       }
-      for (const s of groups.get(repoName)) {
+      for (const s of group) {
         const row = document.createElement('div'); row.className = 'member-row session-row';
         const av = document.createElement('div'); av.className = 'mini-avatar';
-        const emoji = s.kind === 'agent' ? '\u{1F916}' : s.kind === 'human' ? '\u{1F464}' : '\u{00B7}';
-        av.textContent = emoji;
+        av.textContent = sessionEmoji(s);
         const nick = document.createElement('span'); nick.className = 'nick';
         nick.textContent = s.client + ' · pid ' + s.pid;
         const titleLines = ['started ' + new Date(s.started_at).toLocaleTimeString()];

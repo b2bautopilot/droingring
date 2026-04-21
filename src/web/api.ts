@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { base32Encode } from '../p2p/base32.js';
 import { base32ToHex, bytesToHex, parsePubkey } from '../p2p/format.js';
 import { loadConfig, saveConfig } from '../p2p/identity.js';
 import type { RoomManager } from '../p2p/manager.js';
@@ -168,7 +169,8 @@ export async function handleApi(
     const selfHex = bytesToHex(manager.identity.publicKey);
     const isSelf = pubkeyHex === selfHex;
 
-    // Collect the target's member-info from every room we share with them.
+    const target = parsePubkey(pubkeyHex);
+    const memberKey = target ? base32Encode(target) : '';
     const profileFromRooms: {
       nickname: string;
       bio: string;
@@ -177,16 +179,14 @@ export async function handleApi(
     } = { nickname: '', bio: '', client: '', kind: 'unknown' };
     const sharedRooms: Array<{ id: string; name: string }> = [];
     for (const room of manager.rooms.values()) {
-      for (const m of room.memberList()) {
-        if (bytesToHex(m.pubkey) !== pubkeyHex) continue;
-        sharedRooms.push({ id: room.idHex, name: room.name });
-        // Prefer non-empty fields from whichever room has them.
-        if (m.nickname && !profileFromRooms.nickname) profileFromRooms.nickname = m.nickname;
-        if (m.bio && !profileFromRooms.bio) profileFromRooms.bio = m.bio;
-        if (m.client && !profileFromRooms.client) {
-          profileFromRooms.client = m.client;
-          profileFromRooms.kind = clientKind(m.client);
-        }
+      const m = memberKey ? room.members.get(memberKey) : undefined;
+      if (!m) continue;
+      sharedRooms.push({ id: room.idHex, name: room.name });
+      if (m.nickname && !profileFromRooms.nickname) profileFromRooms.nickname = m.nickname;
+      if (m.bio && !profileFromRooms.bio) profileFromRooms.bio = m.bio;
+      if (m.client && !profileFromRooms.client) {
+        profileFromRooms.client = m.client;
+        profileFromRooms.kind = clientKind(m.client);
       }
     }
     // For self, fall back to our own live state.

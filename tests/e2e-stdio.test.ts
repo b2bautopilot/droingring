@@ -30,6 +30,8 @@ class StdioClient {
   private pending = new Map<number, (msg: any) => void>();
   private nextId = 1;
   readonly agentchatHome: string;
+  cwd: string | undefined;
+  envOverrides: Record<string, string> = {};
 
   constructor() {
     this.agentchatHome = mkdtempSync(join(tmpdir(), 'agentchat-e2e-'));
@@ -38,14 +40,16 @@ class StdioClient {
   async start(): Promise<void> {
     const bin = join(process.cwd(), 'dist/bin/agentchat-mcp.js');
     this.child = spawn(process.execPath, [bin], {
+      cwd: this.cwd,
       env: {
         ...process.env,
         AGENTCHAT_HOME: this.agentchatHome,
-        AGENTCHAT_WEB_OPEN: '0', // never pop a browser from tests
-        // The subprocess inherits cwd by default — if that cwd is a git
-        // repo it would auto-join a repo room via the real Hyperswarm DHT,
-        // which is slow and unnecessary for contract-level tests.
+        AGENTCHAT_WEB_OPEN: '0',
+        // Default: skip repo-room auto-join so the subprocess doesn't touch
+        // the public DHT. Individual tests that WANT the auto-join set
+        // envOverrides = { AGENTCHAT_SWARM_DISABLE: '1' } and clear this.
         AGENTCHAT_NO_REPO_ROOM: '1',
+        ...this.envOverrides,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -218,13 +222,8 @@ describe('E2E stdio MCP subprocess', () => {
 
 describe('E2E multiple agents one user — session grouping by repo', () => {
   it('same user, two MCP processes, two different github repos → sessions tagged with their repo', async () => {
-    // Simulate the real-world scenario: one human running Claude Code in
-    // two different project directories on the same machine. Both spawn
-    // `agentchat-mcp` as their MCP server, share AGENTCHAT_HOME (same
-    // identity, same sqlite), and each auto-joins its own repo room.
+    const { mkdirSync, writeFileSync, realpathSync } = await import('node:fs');
     const home = mkdtempSync(join(tmpdir(), 'agentchat-multi-repo-'));
-    // Two fake git repos with different origins.
-    const { mkdirSync, writeFileSync } = await import('node:fs');
     const repoA = mkdtempSync(join(tmpdir(), 'repoA-'));
     const repoB = mkdtempSync(join(tmpdir(), 'repoB-'));
     for (const [dir, url] of [
@@ -235,117 +234,53 @@ describe('E2E multiple agents one user — session grouping by repo', () => {
       writeFileSync(join(dir, '.git', 'config'), `[remote "origin"]\n\turl = ${url}\n`);
     }
 
-    // Spawn one stdio process per repo, each with its cwd pointed at its
-    // fake repo so detectRepoRoom() finds the right origin.
-    const bin = join(process.cwd(), 'dist/bin/agentchat-mcp.js');
-    const { spawn } = await import('node:child_process');
-    const procs: Array<{ child: any; out: string; pending: Map<number, any>; nextId: number }> = [];
-    function spawnInRepo(cwd: string) {
-      const child = spawn(process.execPath, [bin], {
-        cwd,
-        env: {
-          ...process.env,
-          AGENTCHAT_HOME: home,
-          AGENTCHAT_WEB_OPEN: '0',
-          // Intentionally LEAVE AGENTCHAT_NO_REPO_ROOM unset — we want the
-          // subprocess to auto-join. But override the swarm bootstrap to
-          // nothing so we don't hit the public DHT (the wire is mocked).
-          AGENTCHAT_SWARM_DISABLE: '1',
-        },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      const p = { child, out: '', pending: new Map(), nextId: 1 } as any;
-      child.stdout.on('data', (chunk: Buffer) => {
-        p.out += chunk.toString('utf8');
-        let idx = p.out.indexOf('\n');
-        while (idx !== -1) {
-          const line = p.out.slice(0, idx);
-          p.out = p.out.slice(idx + 1);
-          if (line.trim().length) {
-            try {
-              const msg = JSON.parse(line);
-              const cb = p.pending.get(msg.id);
-              if (cb) {
-                p.pending.delete(msg.id);
-                cb(msg);
-              }
-            } catch {
-              /* ignore non-JSON */
-            }
-          }
-          idx = p.out.indexOf('\n');
-        }
-      });
-      procs.push(p);
-      return p;
+    function buildClient(cwd: string): StdioClient {
+      const c = new StdioClient();
+      (c as any).agentchatHome = home;
+      c.cwd = cwd;
+      // Keep repo-auto-join ON (unset the StdioClient default), but skip
+      // the real DHT so this doesn't hit the public network.
+      c.envOverrides = { AGENTCHAT_NO_REPO_ROOM: '', AGENTCHAT_SWARM_DISABLE: '1' };
+      return c;
     }
-    function send(p: any, method: string, params?: any): Promise<any> {
-      const id = p.nextId++;
-      return new Promise((resolve, reject) => {
-        const t = setTimeout(() => {
-          p.pending.delete(id);
-          reject(new Error(`timeout on ${method}`));
-        }, 8_000);
-        p.pending.set(id, (msg: any) => {
-          clearTimeout(t);
-          resolve(msg);
-        });
-        p.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-      });
-    }
+    const a = buildClient(repoA);
+    const b = buildClient(repoB);
 
-    // Start the first child, let it complete its migrations, then start
-    // the second. Two concurrent subprocesses racing to ALTER TABLE on a
-    // fresh sqlite can deadlock briefly — serialising the boot keeps the
-    // test deterministic.
-    const pA = spawnInRepo(repoA);
-    await new Promise((r) => setTimeout(r, 300));
-    await send(pA, 'initialize', {
-      protocolVersion: '2025-11-25',
-      capabilities: {},
-      clientInfo: { name: 'e2e-multi-repo', version: '1.0.0' },
-    });
-    const pB = spawnInRepo(repoB);
-    await new Promise((r) => setTimeout(r, 200));
-    await send(pB, 'initialize', {
-      protocolVersion: '2025-11-25',
-      capabilities: {},
-      clientInfo: { name: 'e2e-multi-repo', version: '1.0.0' },
-    });
     try {
-      // Ask either side for the session inventory. Both processes share
-      // sqlite, so either answer includes rows for both.
-      const res = await send(pA, 'tools/call', {
+      // Serialise the boot — two concurrent subprocesses racing ALTER TABLE
+      // on a fresh sqlite can deadlock briefly.
+      await a.start();
+      await a.send('initialize', {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'e2e-multi-repo', version: '1.0.0' },
+      });
+      await b.start();
+      await b.send('initialize', {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'e2e-multi-repo', version: '1.0.0' },
+      });
+
+      const res = await a.send('tools/call', {
         name: 'chat_list_sessions',
         arguments: {},
       });
+      const aPid = (a as any).child.pid;
+      const bPid = (b as any).child.pid;
       const sessions = res.result.structuredContent.sessions;
-      // Exactly 2 sessions, one per process.
-      const mine = sessions.filter((s: any) => s.pid === pA.child.pid || s.pid === pB.child.pid);
+      const mine = sessions.filter((s: any) => s.pid === aPid || s.pid === bPid);
       expect(mine.length).toBe(2);
-      // Each carries the cwd of the subprocess that registered it. Use
-      // realpath because macOS /tmp → /private/tmp and the subprocess
-      // reports the resolved path.
-      const { realpathSync } = await import('node:fs');
-      const realA = realpathSync(repoA);
-      const realB = realpathSync(repoB);
+      // realpath: macOS /tmp → /private/tmp; the subprocess reports resolved.
       const cwds = new Set(mine.map((s: any) => s.cwd));
-      expect(cwds.has(realA)).toBe(true);
-      expect(cwds.has(realB)).toBe(true);
-      // Each session is tagged with its auto-joined repo room.
+      expect(cwds.has(realpathSync(repoA))).toBe(true);
+      expect(cwds.has(realpathSync(repoB))).toBe(true);
       const repoNames = new Set(mine.map((s: any) => s.repo_name).filter(Boolean));
       expect(repoNames.has('#acme/foo')).toBe(true);
       expect(repoNames.has('#acme/bar')).toBe(true);
     } finally {
-      for (const p of procs) {
-        try {
-          p.child.stdin.end();
-          p.child.kill('SIGTERM');
-        } catch {
-          /* ignore */
-        }
-      }
-      await new Promise((r) => setTimeout(r, 300));
+      await a.stop();
+      await b.stop();
       try {
         rmSync(home, { recursive: true, force: true });
         rmSync(repoA, { recursive: true, force: true });

@@ -139,7 +139,6 @@ function migrate(db: DB): void {
     name: string;
   }>;
   if (sessionCols.length > 0) {
-    // sessions table exists (pre-0.7.2 schema); add new columns idempotently.
     for (const col of ['cwd', 'repo_room_id', 'repo_name']) {
       if (!sessionCols.some((c) => c.name === col)) {
         db.exec(`ALTER TABLE sessions ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);

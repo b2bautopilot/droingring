@@ -29,6 +29,11 @@ export interface SwarmOptions {
   bootstrap?: Array<{ host: string; port: number }>;
 }
 
+/** Escape hatch for tests + constrained environments: skip Hyperswarm
+ * entirely. joinTopic / broadcast / leaveTopic become no-ops. Read once at
+ * module load so per-call checks don't drift. */
+const SWARM_DISABLED = process.env.AGENTCHAT_SWARM_DISABLE === '1';
+
 export class Swarm extends EventEmitter {
   private swarm: SwarmLike | null = null;
   private connections: Set<any> = new Set();
@@ -43,15 +48,7 @@ export class Swarm extends EventEmitter {
 
   async start(): Promise<void> {
     if (this.swarm) return;
-    // Escape hatch for tests + constrained environments: when the env var
-    // is set, skip Hyperswarm entirely. joinTopic / broadcast / leaveTopic
-    // become no-ops; the local Room still works and sqlite is still shared,
-    // so multi-process tests that only care about state (sessions, rooms,
-    // notes) don't have to pay for a DHT handshake they'll never use.
-    if (process.env.AGENTCHAT_SWARM_DISABLE === '1') {
-      this.swarm = null;
-      return;
-    }
+    if (SWARM_DISABLED) return;
     const Ctor = await getHyperswarm();
     this.swarm = new Ctor(
       this.opts.bootstrap ? { bootstrap: this.opts.bootstrap } : {},
@@ -60,7 +57,7 @@ export class Swarm extends EventEmitter {
   }
 
   async joinTopic(topic: Uint8Array): Promise<void> {
-    if (process.env.AGENTCHAT_SWARM_DISABLE === '1') return;
+    if (SWARM_DISABLED) return;
     if (!this.swarm) await this.start();
     if (!this.swarm) return;
     const key = Buffer.from(topic).toString('hex');
