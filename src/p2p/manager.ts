@@ -222,6 +222,46 @@ export class RoomManager extends EventEmitter {
     this.rooms.set(room.idHex, room);
   }
 
+  /**
+   * Join (or create locally, if not yet in memory) a leaderless room keyed
+   * to a deterministic rootSecret — useful for "everyone working on this
+   * GitHub repo" scenarios where peers can't exchange tickets ahead of
+   * time. The creator pubkey is the all-zeros placeholder so nobody can
+   * sign kick/close/members; peers discover each other via mutual hellos
+   * and the key never rotates (epoch 0 only).
+   *
+   * Idempotent across restarts — the same canonical URL always derives
+   * the same room id. Pass the same `name` ("#owner/repo") so the UI
+   * shows a stable label.
+   */
+  async joinOrCreateLeaderlessRoom(
+    name: string,
+    rootSecret: Uint8Array,
+    leaderlessCreator: Uint8Array,
+  ): Promise<Room> {
+    const roomId = deriveRoomId(name, rootSecret);
+    const idHex = Buffer.from(roomId).toString('hex');
+    const existing = this.rooms.get(idHex);
+    if (existing) return existing;
+    const room = new Room(
+      {
+        name,
+        rootSecret,
+        creatorPubkey: leaderlessCreator,
+        bootstrap: [],
+        admissionMode: 'open',
+      },
+      this.identity,
+      this.repo,
+      (env) => this.swarm.broadcast(env),
+    );
+    this.attachRoom(room);
+    room.initSelf(this.nickname, this.clientName, this.bio);
+    await this.swarm.joinTopic(room.id);
+    room.sendHello(this.nickname, this.clientName, this.version, this.bio);
+    return room;
+  }
+
   async createRoom(
     name: string,
     topic?: string,

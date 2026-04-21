@@ -43,8 +43,11 @@ program
   .option('--port <port>', 'port (default 7879)', '7879')
   .option('--host <host>', 'bind host (default 127.0.0.1 — use 0.0.0.0 to expose)', '127.0.0.1')
   .action(async (opts) => {
-    const { buildContextAndServer, registerSession } = await import('./mcp-runner.js');
+    const { buildContextAndServer, registerSession, maybeJoinRepoRoom } = await import(
+      './mcp-runner.js'
+    );
     const { manager, repo } = await buildContextAndServer();
+    await maybeJoinRepoRoom(manager);
     const { startWebServer } = await import('../web/server.js');
     const { loadOrCreateToken } = await import('../web/auth.js');
     const { writeWebUrl, clearWebUrl } = await import('../web/url-file.js');

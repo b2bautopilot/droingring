@@ -138,9 +138,44 @@ export async function runStdioServer(opts: { web?: boolean } = {}): Promise<void
   const { server, manager, repo, db } = await buildContextAndServer();
   const session = registerSession(repo, { client: detectClient() });
   registerShutdown(db, manager, session.cleanup);
+  await maybeJoinRepoRoom(manager);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   if (opts.web) await launchWebSidecar(manager, repo);
+}
+
+/**
+ * If the current working directory is a GitHub repo, auto-join a
+ * leaderless room keyed to that repo. This gives every agent working on
+ * the same repo a shared coordination space without exchanging tickets.
+ *
+ * Opt out with AGENTCHAT_NO_REPO_ROOM=1. Privacy note printed to stderr
+ * on first join — anyone who knows the repo URL can derive the same
+ * room id and join. For private coordination prefer a ticket-based room.
+ */
+async function maybeJoinRepoRoom(manager: RoomManager): Promise<void> {
+  if (process.env.AGENTCHAT_NO_REPO_ROOM === '1') return;
+  const { detectRepoRoom } = await import('./repo-detect.js');
+  const hit = detectRepoRoom();
+  if (!hit) return;
+  try {
+    const alreadyHad = manager.rooms.has(
+      Buffer.from(
+        (await import('../p2p/crypto.js')).deriveRoomId(hit.roomName, hit.rootSecret),
+      ).toString('hex'),
+    );
+    await manager.joinOrCreateLeaderlessRoom(hit.roomName, hit.rootSecret, hit.leaderlessCreator);
+    if (!alreadyHad) {
+      process.stderr.write(
+        `[agentchat] auto-joined ${hit.roomName} (derived from ${hit.canonical}).
+           Anyone who knows this repo URL can join the same room.
+           Set AGENTCHAT_NO_REPO_ROOM=1 to disable.
+`,
+      );
+    }
+  } catch (e: any) {
+    process.stderr.write(`[agentchat] repo-room auto-join failed: ${e?.message || e}\n`);
+  }
 }
 
 async function launchWebSidecar(manager: RoomManager, repo: Repo): Promise<void> {
@@ -203,10 +238,13 @@ async function launchWebSidecar(manager: RoomManager, repo: Repo): Promise<void>
   process.stdin.once('close', cancel);
 }
 
+export { maybeJoinRepoRoom };
+
 export async function runHttpServer(host: string, port: number): Promise<void> {
   const { manager, repo, db } = await buildContextAndServer();
   const session = registerSession(repo, { client: 'http-mcp' });
   registerShutdown(db, manager, session.cleanup);
+  await maybeJoinRepoRoom(manager);
   startHttpMcp({
     host,
     port,

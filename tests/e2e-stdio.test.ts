@@ -42,6 +42,10 @@ class StdioClient {
         ...process.env,
         AGENTCHAT_HOME: this.agentchatHome,
         AGENTCHAT_WEB_OPEN: '0', // never pop a browser from tests
+        // The subprocess inherits cwd by default — if that cwd is a git
+        // repo it would auto-join a repo room via the real Hyperswarm DHT,
+        // which is slow and unnecessary for contract-level tests.
+        AGENTCHAT_NO_REPO_ROOM: '1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

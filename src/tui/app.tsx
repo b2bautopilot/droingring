@@ -137,7 +137,13 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [members, setMembers] = useState<MemberView[]>([]);
   const [pending, setPending] = useState<PendingView[]>([]);
-  const [status, setStatus] = useState('ready');
+  // First-run hint: if the user still has the default nickname, surface a
+  // persistent reminder in the status bar until they set one.
+  const defaultNickHint =
+    manager.getNickname() === 'agent'
+      ? 'Welcome! Set your name:  /nick <name>   and optional bio:  /bio <text>'
+      : 'ready';
+  const [status, setStatus] = useState(defaultNickHint);
   const [overlay, setOverlay] = useState<{ kind: 'help' | 'invite'; text: string } | null>(null);
   const [nickname, setNickname] = useState(manager.getNickname());
 
@@ -391,6 +397,23 @@ function App({ manager, repo }: { manager: RoomManager; repo: Repo }) {
           manager.setNickname(nick);
           setNickname(nick);
           setStatus(`nickname = ${nick}`);
+          return;
+        }
+        case 'bio': {
+          // Everything after /bio becomes the bio — allows spaces. Empty = clear.
+          const bio = rest;
+          if (bio.length > 200) return setStatus('bio too long (max 200 chars)');
+          manager.setBio(bio);
+          // Persist to disk so it survives restart.
+          try {
+            const { loadConfig, saveConfig } = await import('../p2p/identity.js');
+            const cfg = loadConfig();
+            cfg.bio = bio;
+            saveConfig(cfg);
+          } catch {
+            /* best-effort */
+          }
+          setStatus(bio ? `bio = ${bio}` : 'bio cleared');
           return;
         }
         case 'admission': {
@@ -724,6 +747,7 @@ const HELP_TEXT = [
   '  /invite   /share            show the invite ticket for the current room',
   '  /copy                       copy the current ticket to clipboard',
   '  /nick <name>                change your display nickname',
+  '  /bio <text>                 set your short bio (visible in rooms)',
   '  /admission open|approval    change admission for the current room',
   '  /approve <pubkey|nick>      approve a pending join request',
   '  /deny    <pubkey|nick>      deny a pending join request',
@@ -742,8 +766,9 @@ const HELP_TEXT = [
 export async function startTui(opts: { daemonUrl?: string }): Promise<void> {
   const { manager, repo } = await createTuiClient(opts);
   // Register as a local session so other local clients can see us.
-  const { registerSession } = await import('../bin/mcp-runner.js');
+  const { registerSession, maybeJoinRepoRoom } = await import('../bin/mcp-runner.js');
   const session = registerSession(repo, { client: 'tui' });
+  await maybeJoinRepoRoom(manager);
   let ran = false;
   const cleanup = () => {
     if (ran) return;

@@ -253,6 +253,76 @@ describe('E2E real Hyperswarm', () => {
     }
   }, 60_000);
 
+  it('two peers auto-converge on a deterministic repo room over the real swarm', async () => {
+    // The repo-room feature's promise: two agents on the same GitHub repo
+    // find each other on the DHT without ever exchanging a ticket. This
+    // test stands up two managers that independently derive the same room
+    // id from a canonical URL and asserts they discover each other +
+    // exchange messages.
+    const { detectRepoRoom } = await import('../src/bin/repo-detect.js');
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'agentchat-swarm-repo-'));
+    mkdirSync(join(dir, '.git'), { recursive: true });
+    writeFileSync(
+      join(dir, '.git', 'config'),
+      '[remote "origin"]\n\turl = https://github.com/amazedsaint/agentchat.git\n',
+    );
+    const hit = detectRepoRoom(dir);
+    rmSync(dir, { recursive: true, force: true });
+    if (!hit) throw new Error('detector returned null');
+
+    const alice = makeIdentity();
+    const bob = makeIdentity();
+    const a = tmpDb();
+    const b = tmpDb();
+    const aMgr = new RoomManager({
+      identity: alice,
+      repo: a.repo,
+      nickname: 'alice',
+      clientName: 'test-swarm',
+      version: '0',
+      swarm: new Swarm({ bootstrap: testnet.bootstrap }),
+    });
+    const bMgr = new RoomManager({
+      identity: bob,
+      repo: b.repo,
+      nickname: 'bob',
+      clientName: 'test-swarm',
+      version: '0',
+      swarm: new Swarm({ bootstrap: testnet.bootstrap }),
+    });
+    try {
+      await aMgr.start();
+      await bMgr.start();
+      const aRoom = await aMgr.joinOrCreateLeaderlessRoom(
+        hit.roomName,
+        hit.rootSecret,
+        hit.leaderlessCreator,
+      );
+      const bRoom = await bMgr.joinOrCreateLeaderlessRoom(
+        hit.roomName,
+        hit.rootSecret,
+        hit.leaderlessCreator,
+      );
+      expect(aRoom.idHex).toBe(bRoom.idHex);
+      await waitFor(() => aRoom.members.size === 2 && bRoom.members.size === 2, {
+        timeoutMs: 15_000,
+      });
+      aRoom.sendMessage('coord from alice');
+      await waitFor(
+        () => b.repo.fetchMessages(bRoom.idHex, 20).some((m) => m.text === 'coord from alice'),
+        { timeoutMs: 10_000 },
+      );
+    } finally {
+      await aMgr.stop();
+      await bMgr.stop();
+      a.close();
+      b.close();
+    }
+  }, 45_000);
+
   it('kick + key rotation across the real swarm: kicked peer cannot decrypt', async () => {
     const alice = makeIdentity();
     const bob = makeIdentity();
