@@ -1175,7 +1175,7 @@ export const UI_HTML = `<!doctype html>
           'started ' + new Date(s.started_at).toLocaleTimeString(),
         ];
         if (s.cwd) titleLines.push('cwd: ' + s.cwd);
-        nick.title = titleLines.join('\n');
+        nick.title = titleLines.join('\\n');
         row.appendChild(av); row.appendChild(nick);
         box.appendChild(row);
       }
@@ -1423,7 +1423,7 @@ export const UI_HTML = `<!doctype html>
       const titleParts = [];
       if (badgeTitle) titleParts.push(badgeTitle + (m.client ? ' (' + m.client + ')' : ''));
       if (m.bio) titleParts.push(m.bio);
-      if (titleParts.length) nick.title = titleParts.join('\n');
+      if (titleParts.length) nick.title = titleParts.join('\\n');
       nick.addEventListener('click', () => openProfile(m.pubkey));
       row.appendChild(av); row.appendChild(nick);
       if (m.bio) {

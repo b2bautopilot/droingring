@@ -111,8 +111,17 @@ $PM run build --silent
 if [ "${DROINGRING_ELECTRON:-0}" = "1" ]; then
   log "Installing Electron (opt-in — ~200 MB)"
   if [ "$PM" = pnpm ]; then
-    pnpm add --silent electron >/dev/null 2>&1 \
-      || warn "Electron install failed — the MCP will fall back to opening a browser"
+    if pnpm add --silent electron >/dev/null 2>&1; then
+      # pnpm 10+ blocks postinstall scripts by default, so the electron
+      # package arrives without its ~130 MB native binary. Run the
+      # package's install.js explicitly; without this, launchShell() can't
+      # resolve the binary and silently falls back to the browser.
+      (cd "$INSTALL_DIR/node_modules/electron" && node install.js) \
+        >/dev/null 2>&1 \
+        || warn "Electron binary download failed — shell will fall back to the browser"
+    else
+      warn "Electron install failed — the MCP will fall back to opening a browser"
+    fi
   else
     npm install --silent --no-audit --no-fund electron >/dev/null 2>&1 \
       || warn "Electron install failed — the MCP will fall back to opening a browser"
@@ -222,7 +231,11 @@ if [ -r /dev/tty ] && [ "${DROINGRING_NONINTERACTIVE:-0}" != "1" ]; then
     (
       cd "$INSTALL_DIR" && \
       if command -v pnpm >/dev/null 2>&1; then
-        pnpm add electron >/dev/null 2>&1
+        # See note above: pnpm 10+ blocks electron's postinstall, so we
+        # add the package and then run its install.js directly to fetch
+        # the ~130 MB native binary.
+        pnpm add electron >/dev/null 2>&1 && \
+          (cd node_modules/electron && node install.js) >/dev/null 2>&1
       else
         npm install electron --no-save >/dev/null 2>&1
       fi
