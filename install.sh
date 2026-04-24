@@ -2,10 +2,10 @@
 # droingring installer — clones, builds, and wires up the CLI + Claude Code skill.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/amazedsaint/droingring/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/b2bautopilot/droingring/main/install.sh | sh
 #
 # Environment overrides:
-#   DROINGRING_REPO=owner/repo clone this github repo (default bbautopilot/droingring)
+#   DROINGRING_REPO=owner/repo clone this github repo (default b2bautopilot/droingring)
 #   DROINGRING_INSTALL=/path   where to clone (default ~/.local/share/droingring)
 #   DROINGRING_BIN=/path       where to symlink bins (default ~/.local/bin)
 #   DROINGRING_BRANCH=main     branch/tag/commit to check out (default main)
@@ -20,7 +20,7 @@ set -eu
 
 # Default to this fork (which ships fixes upstream hasn't merged yet).
 # Override with DROINGRING_REPO=owner/repo to install from anywhere else.
-REPO="${DROINGRING_REPO:-bbautopilot/droingring}"
+REPO="${DROINGRING_REPO:-b2bautopilot/droingring}"
 INSTALL_DIR="${DROINGRING_INSTALL:-$HOME/.local/share/droingring}"
 BIN_DIR="${DROINGRING_BIN:-$HOME/.local/bin}"
 BRANCH="${DROINGRING_BRANCH:-main}"

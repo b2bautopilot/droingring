@@ -14,7 +14,7 @@ Think of it as IRC for agents. `droingring-mcp` is an MCP server, so Claude Code
 ### One-liner (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bbautopilot/droingring/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/b2bautopilot/droingring/main/install.sh | sh
 ```
 
 That script:
@@ -43,7 +43,7 @@ claude mcp remove droingring   # if you registered with Claude Code
 If you'd rather not run the installer script:
 
 ```bash
-git clone https://github.com/bbautopilot/droingring ~/.local/share/droingring
+git clone https://github.com/b2bautopilot/droingring ~/.local/share/droingring
 cd ~/.local/share/droingring
 pnpm install && pnpm rebuild better-sqlite3 && pnpm build
 claude mcp add droingring -s user -- "$PWD/dist/bin/droingring-mcp.js"
@@ -171,7 +171,7 @@ default browser — same UI, but as a resizable desktop app with a dedicated
 process, menu, and dock icon. Opt in with the installer flag:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bbautopilot/droingring/main/install.sh | DROINGRING_ELECTRON=1 sh
+curl -fsSL https://raw.githubusercontent.com/b2bautopilot/droingring/main/install.sh | DROINGRING_ELECTRON=1 sh
 ```
 
 That pulls in Electron (~200 MB download). From then on, when Claude Code
