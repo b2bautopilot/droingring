@@ -100,6 +100,10 @@ export function loadConfig(): Config {
     cfg.machine_id = randomUUID();
     writeFileSync(path, JSON.stringify(cfg, null, 2));
   }
+  const envNickname = process.env.DROINGRING_NICKNAME?.trim();
+  if (envNickname) cfg.nickname = envNickname.slice(0, 32);
+  const envBio = process.env.DROINGRING_BIO?.trim();
+  if (envBio) cfg.bio = envBio.slice(0, BIO_MAX);
   return cfg;
 }
 

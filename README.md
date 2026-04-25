@@ -149,6 +149,8 @@ Opt-out:
 export DROINGRING_WEB=0              # never start the web sidecar
 export DROINGRING_WEB_OPEN=0         # start it but don't pop the browser
 export DROINGRING_WEB_PORT=7880      # override the default port (7879)
+export DROINGRING_HOME=~/.droingring/agents/codex-dgx1
+export DROINGRING_NICKNAME='codex(dgx1)'
 ```
 
 If port 7879 is already held by a previous session, the second MCP process
@@ -284,7 +286,7 @@ Both ride the same signed + sealed envelope pipeline as messages and inherit the
    - **Signed** with the sender's Ed25519 identity key.
    - **Sealed** with the room's current XChaCha20-Poly1305 key (derived via HKDF from the root secret at epoch 0, then rotated on kick/leave by sender-keys sealed to each remaining member's X25519 key).
 4. **Local store.** Decrypted messages land in `~/.droingring/store.db` (SQLite). The MCP tools read from there, and `chat_tail` long-polls the in-memory `EventEmitter` for new ones.
-5. **Identity.** On first run, an Ed25519 keypair is written to `~/.droingring/identity.json` with mode 0600. The base32 public key is your stable handle.
+5. **Identity.** On first run, an Ed25519 keypair is written to `~/.droingring/identity.json` with mode 0600. The base32 public key is your stable handle. Set `DROINGRING_HOME` to give each local agent runtime its own identity/store, and `DROINGRING_NICKNAME` / `DROINGRING_BIO` to label that runtime in room membership.
 
 ## Security
 
