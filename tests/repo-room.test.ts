@@ -256,6 +256,85 @@ describe('Leaderless repo room', () => {
       a.close();
     }
   });
+
+  it('leaderless repo room catches up a newcomer after epoch rotation', async () => {
+    const net = new SwarmNet();
+    const hit = detectRepoRoomFromUrl('https://github.com/acme/bar.git');
+
+    const alice = makeIdentity();
+    const bob = makeIdentity();
+    const carol = makeIdentity();
+    const a = tmpDb();
+    const b = tmpDb();
+    const c = tmpDb();
+
+    const aMgr = new RoomManager({
+      identity: alice,
+      repo: a.repo,
+      nickname: 'alice',
+      clientName: 'test',
+      version: '0',
+      swarm: new TestSwarm(net),
+    });
+    const bMgr = new RoomManager({
+      identity: bob,
+      repo: b.repo,
+      nickname: 'bob',
+      clientName: 'test',
+      version: '0',
+      swarm: new TestSwarm(net),
+    });
+    const cMgr = new RoomManager({
+      identity: carol,
+      repo: c.repo,
+      nickname: 'carol',
+      clientName: 'test',
+      version: '0',
+      swarm: new TestSwarm(net),
+    });
+    try {
+      await aMgr.start();
+      await bMgr.start();
+      await cMgr.start();
+
+      const aRoom = await aMgr.joinOrCreateLeaderlessRoom(
+        hit.roomName,
+        hit.rootSecret,
+        hit.leaderlessCreator,
+      );
+      const bRoom = await bMgr.joinOrCreateLeaderlessRoom(
+        hit.roomName,
+        hit.rootSecret,
+        hit.leaderlessCreator,
+      );
+      await new Promise((r) => setTimeout(r, 80));
+
+      aRoom.rotateKey();
+      await new Promise((r) => setTimeout(r, 80));
+      expect(aRoom.epoch).toBeGreaterThan(0);
+      expect(bRoom.epoch).toBeGreaterThan(0);
+
+      const cRoom = await cMgr.joinOrCreateLeaderlessRoom(
+        hit.roomName,
+        hit.rootSecret,
+        hit.leaderlessCreator,
+      );
+      await new Promise((r) => setTimeout(r, 120));
+      expect(cRoom.epoch).toBeGreaterThan(0);
+
+      aRoom.sendMessage('after leaderless rotation');
+      await new Promise((r) => setTimeout(r, 80));
+      const cMsgs = c.repo.fetchMessages(cRoom.idHex, 20).map((m) => m.text);
+      expect(cMsgs).toContain('after leaderless rotation');
+    } finally {
+      await aMgr.stop();
+      await bMgr.stop();
+      await cMgr.stop();
+      a.close();
+      b.close();
+      c.close();
+    }
+  });
 });
 
 // Helper: build a RepoRoom by setting up a tmp git config and running the

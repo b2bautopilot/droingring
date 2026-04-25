@@ -323,6 +323,9 @@ export class Room extends EventEmitter {
   isCreator(): boolean {
     return Buffer.compare(this.identity.publicKey, this.creatorPubkey) === 0;
   }
+  isLeaderless(): boolean {
+    return this.creatorPubkey.every((b) => b === 0);
+  }
   /** Used by RoomManager to rehydrate members from the store on restart. */
   seedMember(info: MemberInfo): void {
     this.members.set(base32Encode(info.pubkey), info);
@@ -613,6 +616,8 @@ export class Room extends EventEmitter {
         if (amCreator) {
           this.sendMembers();
           if (this.epoch > 0) this.catchUpNewcomer(env.from, inner.x25519_pub);
+        } else if (this.isLeaderless() && this.epoch > 0) {
+          this.catchUpNewcomer(env.from, inner.x25519_pub);
         }
         return true;
       }
